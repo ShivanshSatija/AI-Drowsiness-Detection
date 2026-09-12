@@ -1,0 +1,509 @@
+{
+  "created": "2026-09-13T02:58:26",
+  "source": "mrlEyes_2018_01.zip",
+  "source_sha256": "17ff89928005cb6e63a53fe020e419060279ff59e57555cfa49693fc1865fdfc",
+  "images_total": 84898,
+  "subjects_total": 37,
+  "method": "seeded search over random subject partitions; greedy fill towards image-fraction targets; lowest cost kept; whole subjects only",
+  "seed": 0,
+  "trials": 20000,
+  "best_trial": 14152,
+  "targets": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "cost_terms": {
+    "fraction": 0.019628259794105818,
+    "closed_ratio": 0.018543232966008294,
+    "glasses_ratio": 0.18357257692144402,
+    "female_missing": 0,
+    "sensor2_missing": 0,
+    "min_class": 0
+  },
+  "min_class_images": 2000,
+  "splits": {
+    "train": {
+      "subjects": 25,
+      "images": 59012,
+      "fraction": 0.6950929350514735,
+      "closed": 29076,
+      "open": 29936,
+      "closed_ratio": 0.4927133464380126,
+      "glasses": 16172,
+      "glasses_ratio": 0.2740459567545584,
+      "female_subjects": 3,
+      "sensor2_images": 2995,
+      "sensor3_images": 1121,
+      "good_light_ratio": 0.28570460245373824,
+      "reflection_ratio": 0.13515895072188708
+    },
+    "val": {
+      "subjects": 4,
+      "images": 12779,
+      "fraction": 0.15052180263374873,
+      "closed": 6339,
+      "open": 6440,
+      "closed_ratio": 0.4960482040848267,
+      "glasses": 3271,
+      "glasses_ratio": 0.25596682056498943,
+      "female_subjects": 1,
+      "sensor2_images": 2835,
+      "sensor3_images": 1643,
+      "good_light_ratio": 0.46255575553642697,
+      "reflection_ratio": 0.36810392049456137
+    },
+    "test": {
+      "subjects": 8,
+      "images": 13107,
+      "fraction": 0.15438526231477773,
+      "closed": 6531,
+      "open": 6576,
+      "closed_ratio": 0.49828336003662166,
+      "glasses": 4558,
+      "glasses_ratio": 0.34775310902571144,
+      "female_subjects": 1,
+      "sensor2_images": 6162,
+      "sensor3_images": 0,
+      "good_light_ratio": 0.6482795452811475,
+      "reflection_ratio": 0.4570840009155413
+    }
+  },
+  "per_subject": {
+    "s0001": {
+      "n": 3242,
+      "closed": 1841,
+      "open": 1401,
+      "glasses": 1616,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 244,
+      "reflections": 1040
+    },
+    "s0002": {
+      "n": 1114,
+      "closed": 1007,
+      "open": 107,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 125,
+      "reflections": 0
+    },
+    "s0003": {
+      "n": 679,
+      "closed": 559,
+      "open": 120,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 19,
+      "reflections": 0
+    },
+    "s0004": {
+      "n": 1069,
+      "closed": 1069,
+      "open": 0,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 121,
+      "reflections": 1
+    },
+    "s0005": {
+      "n": 736,
+      "closed": 708,
+      "open": 28,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 124,
+      "reflections": 0
+    },
+    "s0006": {
+      "n": 1012,
+      "closed": 1011,
+      "open": 1,
+      "glasses": 1012,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 0,
+      "reflections": 875
+    },
+    "s0007": {
+      "n": 624,
+      "closed": 613,
+      "open": 11,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 156,
+      "reflections": 0
+    },
+    "s0008": {
+      "n": 832,
+      "closed": 832,
+      "open": 0,
+      "glasses": 832,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 0,
+      "reflections": 265
+    },
+    "s0009": {
+      "n": 387,
+      "closed": 363,
+      "open": 24,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 0,
+      "reflections": 0
+    },
+    "s0010": {
+      "n": 399,
+      "closed": 331,
+      "open": 68,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 0,
+      "reflections": 0
+    },
+    "s0011": {
+      "n": 1648,
+      "closed": 1508,
+      "open": 140,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 119,
+      "reflections": 0
+    },
+    "s0012": {
+      "n": 8728,
+      "closed": 4498,
+      "open": 4230,
+      "glasses": 2942,
+      "female": 0,
+      "sensor2": 1097,
+      "sensor3": 1643,
+      "good_light": 3958,
+      "reflections": 3405
+    },
+    "s0013": {
+      "n": 3605,
+      "closed": 2975,
+      "open": 630,
+      "glasses": 1377,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 0,
+      "reflections": 111
+    },
+    "s0014": {
+      "n": 8884,
+      "closed": 3768,
+      "open": 5116,
+      "glasses": 1670,
+      "female": 0,
+      "sensor2": 1614,
+      "sensor3": 1121,
+      "good_light": 4017,
+      "reflections": 2877
+    },
+    "s0015": {
+      "n": 1132,
+      "closed": 784,
+      "open": 348,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 1029,
+      "reflections": 0
+    },
+    "s0016": {
+      "n": 1889,
+      "closed": 1716,
+      "open": 173,
+      "glasses": 0,
+      "female": 1889,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 1702,
+      "reflections": 220
+    },
+    "s0017": {
+      "n": 1648,
+      "closed": 1319,
+      "open": 329,
+      "glasses": 0,
+      "female": 1648,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 969,
+      "reflections": 4
+    },
+    "s0018": {
+      "n": 4410,
+      "closed": 3689,
+      "open": 721,
+      "glasses": 2093,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 2246,
+      "reflections": 605
+    },
+    "s0019": {
+      "n": 6175,
+      "closed": 2907,
+      "open": 3268,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 743,
+      "reflections": 4
+    },
+    "s0020": {
+      "n": 704,
+      "closed": 25,
+      "open": 679,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 367,
+      "reflections": 9
+    },
+    "s0021": {
+      "n": 987,
+      "closed": 135,
+      "open": 852,
+      "glasses": 599,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 38,
+      "reflections": 456
+    },
+    "s0022": {
+      "n": 382,
+      "closed": 126,
+      "open": 256,
+      "glasses": 167,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 381,
+      "reflections": 154
+    },
+    "s0023": {
+      "n": 522,
+      "closed": 55,
+      "open": 467,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 520,
+      "reflections": 11
+    },
+    "s0024": {
+      "n": 752,
+      "closed": 205,
+      "open": 547,
+      "glasses": 428,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 6,
+      "reflections": 132
+    },
+    "s0025": {
+      "n": 1502,
+      "closed": 137,
+      "open": 1365,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 632,
+      "reflections": 4
+    },
+    "s0026": {
+      "n": 1246,
+      "closed": 409,
+      "open": 837,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 299,
+      "reflections": 1
+    },
+    "s0027": {
+      "n": 665,
+      "closed": 92,
+      "open": 573,
+      "glasses": 329,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 178,
+      "reflections": 255
+    },
+    "s0028": {
+      "n": 736,
+      "closed": 13,
+      "open": 723,
+      "glasses": 489,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 8,
+      "reflections": 3
+    },
+    "s0029": {
+      "n": 1393,
+      "closed": 177,
+      "open": 1216,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 1230,
+      "reflections": 10
+    },
+    "s0030": {
+      "n": 1384,
+      "closed": 331,
+      "open": 1053,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 901,
+      "reflections": 15
+    },
+    "s0031": {
+      "n": 1738,
+      "closed": 241,
+      "open": 1497,
+      "glasses": 0,
+      "female": 1738,
+      "sensor2": 1738,
+      "sensor3": 0,
+      "good_light": 1656,
+      "reflections": 1044
+    },
+    "s0032": {
+      "n": 6162,
+      "closed": 143,
+      "open": 6019,
+      "glasses": 2714,
+      "female": 0,
+      "sensor2": 6162,
+      "sensor3": 0,
+      "good_light": 5489,
+      "reflections": 4630
+    },
+    "s0033": {
+      "n": 681,
+      "closed": 109,
+      "open": 572,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 607,
+      "reflections": 14
+    },
+    "s0034": {
+      "n": 739,
+      "closed": 113,
+      "open": 626,
+      "glasses": 0,
+      "female": 0,
+      "sensor2": 739,
+      "sensor3": 0,
+      "good_light": 2,
+      "reflections": 0
+    },
+    "s0035": {
+      "n": 642,
+      "closed": 21,
+      "open": 621,
+      "glasses": 642,
+      "female": 0,
+      "sensor2": 642,
+      "sensor3": 0,
+      "good_light": 380,
+      "reflections": 230
+    },
+    "s0036": {
+      "n": 6193,
+      "closed": 2096,
+      "open": 4097,
+      "glasses": 2522,
+      "female": 6193,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 706,
+      "reflections": 1077
+    },
+    "s0037": {
+      "n": 10257,
+      "closed": 6020,
+      "open": 4237,
+      "glasses": 4569,
+      "female": 10257,
+      "sensor2": 0,
+      "sensor3": 0,
+      "good_light": 2296,
+      "reflections": 1219
+    }
+  },
+  "field_codings": {
+    "gender": {
+      "0": "male",
+      "1": "female"
+    },
+    "glasses": {
+      "0": "no",
+      "1": "yes"
+    },
+    "eye_state": {
+      "0": "closed",
+      "1": "open"
+    },
+    "reflections": {
+      "0": "none",
+      "1": "low",
+      "2": "high"
+    },
+    "lighting": {
+      "0": "bad",
+      "1": "good"
+    },
+    "sensor": {
+      "1": "RealSense SR300 640x480",
+      "2": "IDS 1280x1024",
+      "3": "Aptina 752x480"
+    }
+  }
+}

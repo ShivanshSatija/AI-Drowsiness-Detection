@@ -7,12 +7,13 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 5 of 15 complete; Stage 6 in progress; Stage 7 code ready.**
+> **Status: Stages 1–6 of 15 complete; Stage 7 training in progress.**
 > Camera → landmarks → EAR / MAR → head pose → frame validity → eye crops all
-> work live. The CNN, its augmentation, training script and Colab notebook are
-> built and pipeline-tested on synthetic data — but **no eye-state results exist
-> yet**: they will come from training on the subject-independent MRL split once
-> the dataset has been obtained and inspected (Stage 6).
+> work live. The MRL Eye Dataset has been inspected and split by subject
+> (84,898 images, 37 subjects, no subject in two splits). The CNN, augmentation,
+> training script and Colab notebook are built; the first real training run is
+> under way and its measured results will be added here when it finishes.
+> **No eye-state accuracy is claimed until then.**
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -83,7 +84,8 @@ AI-Drowsiness-Detection/
 │   └── app.py              Streamlit dashboard                 [Stage 12]
 ├── training/
 │   ├── inspect_mrl.py      report the dataset's real structure  [Stage 6]
-│   ├── prepare_mrl.py      subject-independent split -> .npz   [Stage 6, pending]
+│   ├── prepare_mrl.py      subject-independent split -> .npz   [Stage 6]
+│   ├── splits/             committed subject lists + split_stats.json
 │   ├── train_eye_cnn.py    training + evaluation logic          [Stage 7]
 │   └── train_eye_cnn.ipynb thin Colab driver around the script [Stage 7]
 ├── models/
@@ -133,7 +135,67 @@ present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
 
-### Stage 7 — eye-state CNN (code ready; training waits for the Stage 6 split)
+### Stage 6 — MRL Eye Dataset: what it really is, and how it was split
+
+```bat
+python training\inspect_mrl.py data\mrl\mrlEyes_2018_01.zip                        :: report the real structure
+python training\prepare_mrl.py --source data\mrl\mrlEyes_2018_01.zip --out data\mrl_prepared --preview
+```
+
+**Verified facts about the archive** (from the inspector and the archive's own
+`annotation.txt`, not from memory): `mrlEyes_2018_01.zip`, 341.9 MB, SHA-256
+`17ff8992…fdfc`; one folder per subject `s0001…s0037`; **84,898** 8-bit grayscale
+PNGs, square, 56–278 px (median 87); every filename matches
+`sXXXX_YYYYY_G_GL_ST_RF_LT_SN` (gender, glasses, eye state 0 = closed / 1 = open,
+reflections none/low/high, lighting bad/good, sensor 01 RealSense SR300 · 02 IDS ·
+03 Aptina). Overall: **41,946 closed / 42,952 open**, glasses in 28.3 % of
+images, 5 of 37 subjects female, lighting labelled "good" in only 36.8 %,
+sensor 02 in six subjects and sensor 03 in two (s0012, s0014).
+
+**Why the split needed a search, not a shuffle.** Subjects are wildly unequal:
+382 to 10,257 images each, and several are effectively single-class
+(s0004: 1,069 closed / 0 open; s0006: 1,011 / 1; s0008: 832 / 0; s0028: 13 / 723;
+s0035: 21 / 621). A random subject shuffle can give a test set that is mostly
+one class or mostly one person. `prepare_mrl.py` therefore evaluates
+**20,000 seeded random partitions** (whole subjects only, greedy fill towards
+70 / 15 / 15 of images) and keeps the one with the lowest cost: deviation from
+the image fractions, deviation of the validation and test closed ratio and
+glasses ratio from the global values, and penalties for a validation or test
+split without a female subject, without sensor-02 images, or with fewer than
+2,000 images of either class. Seed 0, best trial 14,152, cost 0.2217 (fraction
+0.020 · closed ratio 0.019 · glasses ratio 0.184 · all penalties 0).
+
+| Split | Subjects | Images | Closed | Glasses | Female subj. | Sensor 02 / 03 imgs |
+|---|---|---|---|---|---|---|
+| train | 25 | 59,012 (69.5 %) | 49.3 % | 27.4 % | 3 | 2,995 / 1,121 |
+| val | 4 — s0011 s0012 s0027 s0031 | 12,779 (15.1 %) | 49.6 % | 25.6 % | 1 | 2,835 / 1,643 |
+| test | 8 — s0004 s0006 s0007 s0008 s0009 s0015 s0016 s0032 | 13,107 (15.4 %) | 49.8 % | 34.8 % | 1 | 6,162 / 0 |
+
+Guarantees: no subject appears in two splits — asserted in `prepare_mrl.py`
+before anything is written, again when the `.npz` packs are re-opened, and a
+third time at the start of every training run. The subject lists and every
+statistic above are committed in [`training/splits/`](training/splits/) so the
+split is reproducible and auditable. Known limitations: the test set contains
+no Aptina (sensor 03) images — only two subjects have any and both cannot be
+held out — and its glasses share (34.8 %) is above the global 28.3 %; the
+validation set has only four subjects.
+
+**Preprocessing** used exactly `src.eye_cnn.preprocess_eye_image` (grayscale →
+64 × 64, `INTER_AREA` since almost every image shrinks) and packed uint8 images
+with all fields: `train.npz` 125.9 MB, `val.npz` 28.8 MB, `test.npz` 35.5 MB
+(git-ignored under `data/mrl_prepared/`; copy to Google Drive for Colab).
+Mean intensity differs between splits (81.5 / 91.8 / 115.6) — a concrete reason
+per-image standardisation is applied at load time rather than a dataset mean.
+
+**Crop-scale check.** Twelve MRL samples (open / closed, with / without glasses)
+were laid beside the eight live crops saved in Stage 5: with `crop_scale = 1.5`
+the live crops frame the eye like MRL does (eye spanning roughly 65–70 % of the
+tile, skin margin above and below), so the value stays. The visible domain gap
+is elsewhere — the webcam crops are softer and lower-contrast than MRL's
+infrared frames — which standardisation plus the blur / gamma augmentation
+address, and which the NoIR camera in Stage 13 should narrow.
+
+### Stage 7 — eye-state CNN (code ready; first real run training)
 
 ```bat
 python -m src.eye_cnn --self-test                       :: preprocessing, augmentation, model, checkpoint round trip
@@ -513,8 +575,8 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 3 | EAR + MAR from landmarks, live display + CSV recording | ✅ done |
 | 4 | Head pose (yaw / pitch / roll) + INVALID-frame gate + invalid-frame rate | ✅ done |
 | 5 | Eye-region cropping + preprocessing shared with training | ✅ done |
-| 6 | MRL eye dataset preparation (subject-independent split) | 🔶 inspection tool + acquisition guide done; dataset not yet obtained, `prepare_mrl.py` waits for its real structure |
-| 7 | Eye-state CNN training and evaluation | 🔶 model, augmentation, training script and Colab notebook built and pipeline-tested on synthetic data; **no results until Stage 6 delivers the split** |
+| 6 | MRL eye dataset: inspected, subject-independent split built and verified, packs written | ✅ done |
+| 7 | Eye-state CNN training and evaluation | 🔶 code complete; first real run training — results pending |
 | 8 | CNN integrated into the live pipeline | ⬜ |
 | 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ⬜ |
 | 10 | Escalating laptop alert system | ⬜ |

@@ -50,10 +50,10 @@ DOCUMENTED_FIELDS = [
     ("gender", {"0": "man", "1": "woman"}),
     ("glasses", {"0": "no", "1": "yes"}),
     ("eye_state", {"0": "closed", "1": "open"}),
-    ("reflections", {"0": "none", "1": "small", "2": "big"}),
+    ("reflections", {"0": "none", "1": "low", "2": "high"}),
     ("lighting", {"0": "bad", "1": "good"}),
-    ("sensor", {"01": "RealSense", "02": "IDS", "03": "Aptina"}),
-]
+    ("sensor", {"01": "RealSense SR300 640x480", "02": "IDS 1280x1024", "03": "Aptina 752x480"}),
+]  # wording taken from the archive's own annotation.txt (verified 2026-09-13)
 
 
 class Source:

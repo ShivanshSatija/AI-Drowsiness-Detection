@@ -59,31 +59,36 @@ meanings, marked "to verify".
 Paste the complete output into the chat. `prepare_mrl.py` is written from
 that output, not from assumptions.
 
-### 4. What `prepare_mrl.py` will do (plan — confirmed only after inspection)
+### 4. What `prepare_mrl.py` does (built from the inspected structure, 2026-09-13)
 
-1. Walk the dataset, parse the annotation fields from each filename, and
-   write a manifest CSV: path, subject, eye state, glasses, reflections,
-   lighting, sensor, image size.
-2. **Subject-independent split.** Subjects (not images) are assigned to
-   train / validation / test with a fixed seed; no subject appears in more
-   than one split, and the script asserts this before writing anything. The
-   assignment is chosen so that each split contains both eye states, both
-   glasses conditions and, as far as 37 subjects allow, every sensor. The
-   exact subject lists are written to `training/splits/*.txt` and committed,
-   so the split is reproducible and auditable.
-3. Preprocess every image with `src.eye_cnn.preprocess_eye_image` — the same
-   function the live system uses — and pack each split into a compact
-   `.npz` (uint8 64 × 64 images, labels, subject IDs, annotations) for fast
-   loading in Colab. Standardisation is applied at load time by the same
-   `normalize_eye` function, so training and inference tensors are produced
-   by identical code.
-4. Report the class balance, glasses balance and image-size statistics per
-   split, and place a few MRL samples next to the eye crops saved from the
-   live camera (`data/eye_crops/`) to check that the live `crop_scale`
-   produces comparable framing before any training happens.
+```bat
+python training\prepare_mrl.py --source data\mrl\mrlEyes_2018_01.zip --out data\mrl_prepared --preview
+```
 
-Augmentation (training-time only, Stage 7): horizontal flip (the dataset does
-not label eye side, so the classifier must be side-agnostic), small rotation
-and scale/shift jitter (to absorb crop-geometry differences), brightness /
-contrast / gamma jitter and mild blur or noise (low-light and IR rehearsal).
-Augmentation is applied to the uint8 image *before* standardisation.
+1. Parses every filename (all 84,898 matched the pattern documented in the
+   archive's `annotation.txt`; 0 skipped) into a manifest with subject, eye
+   state, gender, glasses, reflections, lighting, sensor and original size.
+2. **Subject-independent split by seeded search.** Whole subjects go to
+   train / val / test. Because subjects range from 382 to 10,257 images and
+   several are almost single-class, 20,000 seeded random partitions are
+   scored and the lowest-cost one kept (image fractions near 70 / 15 / 15,
+   val/test closed ratio and glasses ratio near the global values, at least
+   one female subject and some sensor-02 images in val and test, at least
+   2,000 images of each class in val and test). Disjointness is asserted
+   before writing. Result (seed 0, trial 14,152): train 25 subjects / 59,012
+   images, val 4 / 12,779, test 8 / 13,107; closed 49.3 / 49.6 / 49.8 %. The
+   subject lists and all statistics are in `training/splits/` and are
+   committed.
+3. Preprocesses every image with `src.eye_cnn.preprocess_eye_image` and packs
+   each split into `.npz` (uint8 64 × 64 images + all fields). Standardisation
+   happens at load time via `src.eye_cnn.normalize_eye`.
+4. Re-opens the packs and verifies shapes, dtypes, label values and
+   disjointness; `--preview` writes 32-image montages per split.
+
+Copy `data/mrl_prepared/{train,val,test}.npz` to
+`MyDrive/AI-Drowsiness-Detection/mrl_prepared/` for the Colab notebook.
+
+Augmentation (training-time only, in `src.eye_cnn.augment_eye`): horizontal
+flip (the dataset does not label eye side), rotation / scale / shift jitter,
+contrast / brightness / gamma, a low-light branch (darkening then sensor
+noise, before standardisation), blur, specular spots and cutouts for glasses.

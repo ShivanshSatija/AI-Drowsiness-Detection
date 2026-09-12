@@ -64,7 +64,8 @@ import numpy as np
 from src.capture import (CameraConfig, CameraError, FPSCounter, FrameSource,
                          create_source, save_snapshot)
 from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
-                           LandmarkConfig, LandmarkModelError, draw_landmarks)
+                           LandmarkConfig, LandmarkModelError, draw_driver_zone,
+                           draw_ignored_faces, draw_landmarks)
 
 # --- landmark index sets (MediaPipe canonical topology) ---------------------
 # Order matters: p1..p6 for the EAR formula.
@@ -351,12 +352,23 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
 
             if show_window:
                 display = frame.copy()
+                draw_driver_zone(display, detector.config)
                 if face is not None:
                     draw_landmarks(display, face, DRAW_MODES[mode_index])
                     draw_feature_geometry(display, face)
                 if mirror:
                     display = cv2.flip(display, 1)
+                draw_ignored_faces(display, detector.last_ignored_boxes, mirror)
                 draw_feature_hud(display, fps, inference_ms, feats, face, mirror, ear_trace, mar_trace)
+                if detector.last_face_count > 1 or (detector.last_face_count and face is None):
+                    note = ("{} faces - measuring driver only ({})".format(
+                        detector.last_face_count, face.selection) if face is not None
+                            else "{} face(s) outside driver zone - no driver".format(
+                                detector.last_face_count))
+                    cv2.putText(display, note, (10, 156), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                                (0, 0, 0), 3, cv2.LINE_AA)
+                    cv2.putText(display, note, (10, 156), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                                (0, 200, 255), 1, cv2.LINE_AA)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF

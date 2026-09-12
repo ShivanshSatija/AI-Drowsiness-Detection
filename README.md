@@ -158,7 +158,8 @@ return NaN rather than dividing by zero if a width degenerates.
 
 | Condition | EAR (mean of both eyes) | MAR | Notes |
 |---|---|---|---|
-| Static frontal test portrait — eyes open, smiling, mouth closed; 883 frames over two runs | median **0.182**, std 0.003, range 0.173–0.193 | median **0.005**, max 0.025 | Noise floor: frame-to-frame ǀΔEARǀ median 0.0007; the two eyes agree to ǀL−Rǀ = 0.005 |
+| Static test portrait, **vertically squashed** to 640 × 480 (aspect factor 0.53 — see note below); 883 frames over two runs | median 0.182, std 0.003 — absolute value is an artefact of the squash | median 0.005 | Noise floor: frame-to-frame ǀΔEARǀ median 0.0007; the two eyes agree to ǀL−Rǀ = 0.005 |
+| Same portrait at its **true aspect ratio** (driver face in the two-face test video); 244 frames | median **0.323**, std 0.008, range 0.317–0.343 | median 0.001 | Eyes open, smiling, mouth closed |
 | Live webcam, developer's face, 116 frames with a face (face in view 46 % of the run) | median **0.272**, range 0.176–0.416 | median **0.016**, max 0.044 (mouth closed) | One 2-frame dip to 0.176, consistent with a blink |
 | Live test, frontal, **eyes open** | L 0.400 · R 0.357 · mean **0.379** | 0.005 | Blinks visible as sharp dips in the trace |
 | Live test, frontal, eyes half-closed / looking down | L 0.293 · R 0.258 · mean 0.275 | 0.004 | |
@@ -178,10 +179,16 @@ eye that is turning away, so the *far* eye's EAR inflates (to a meaningless
 gap is therefore a head-pose signal, not noise: Stage 4 measures yaw directly
 and marks such frames INVALID, and Stage 9 must never treat them as eye closure.
 
-**Open-eye EAR differs between people.** The smiling test portrait sits at
-0.18 with eyes open; the developer at 0.38. A single fixed threshold from the
-literature is unlikely to transfer between drivers — an input to Stage 9's
-design (per-session calibration is one option), not something applied here.
+**Open-eye EAR differs between people — and image aspect ratio changes it.**
+The first portrait test video was resized to 640 × 480 without preserving
+aspect ratio, compressing it vertically by 0.53×; its EAR of 0.18 is that
+artefact, since the same face at true aspect measures 0.32 (0.32 × 0.53 ≈ 0.18).
+A useful warning in its own right: EAR values are only comparable between
+frames of the same aspect ratio, so the camera resolution must never change
+mid-session. At true aspect the portrait (0.32) and the developer (0.38) still
+differ, so a single fixed threshold from the literature is unlikely to transfer
+between drivers — an input to Stage 9's design (per-session calibration is one
+option), not something applied here.
 
 ### Stage 2 — live facial landmarks
 
@@ -190,6 +197,7 @@ python -m src.landmarks                :: live camera, face contours + irises dr
 python -m src.landmarks --mode mesh    :: full 468-triangle tesselation
 python -m src.landmarks --gray         :: feed grayscale frames (rehearsal for the IR camera)
 python -m src.landmarks --no-window --max-frames 300   :: headless: detection rate + timing only
+python -m src.landmarks --anchor 0.5 0.5 --zone 0.4    :: where the driver's face is expected (see below)
 python -m src.landmarks --self-test    :: model integrity + code checks, no camera needed
 ```
 
@@ -210,6 +218,25 @@ returns a `FaceLandmarks` object (or `None` when no face is present) holding a
 - **No face → `None`, never a stale or zero result.** Stage 4 will turn this
   into an explicit INVALID frame; nothing downstream should ever interpret a
   missing face as closed eyes.
+- **Two people in view → the driver is chosen, the other is ignored.** Up to
+  two faces are detected. Only faces inside a configurable *driver zone* around
+  the expected driver position (`--anchor`, default frame centre; `--zone`
+  radius 0.40 in normalised units) are candidates. Once chosen, the driver is
+  kept while a face stays within 0.15 of their last position — a continuity
+  lock, so tracking cannot flip between two people — otherwise the candidate
+  nearest the anchor wins. Other faces are boxed **IGNORED** on screen and
+  never measured; faces present but all outside the zone give "no driver".
+  Verified on a synthetic two-face video built from MediaPipe's test portrait
+  ([`evaluation/two_face_test.py`](evaluation/two_face_test.py)): the driver
+  was kept in **100 % of 200 two-face frames**, including while the second face
+  slid onto the anchor itself; a lone face inside the zone was selected in
+  100 %; a lone face outside the zone was rejected in 100 %. Known limitation:
+  if the driver's face is lost while a passenger sits inside the zone, the
+  passenger is selected — Stage 4's head-pose gating and Stage 14's camera
+  placement narrow that window. Also found and handled: MediaPipe occasionally
+  returns *two* landmark sets for the **same** face right after a re-detection
+  (8 of 150 single-face frames); duplicates are removed by box overlap
+  (IoU ≥ 0.5) before selection. All radii are initial values, not tuned.
 
 Measured on this laptop (640 × 480, CPU): MediaPipe inference **~4 ms** per frame
 with no face in view, **7–8 ms** on a static test portrait, and **10–13 ms live

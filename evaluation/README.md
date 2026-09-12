@@ -4,6 +4,28 @@ Measurement tooling and committed measurements. Currently holds the Stage 1
 camera baseline and the Stage 3 EAR/MAR observations; the full system
 evaluation (Stage 15) will be added here later.
 
+## two_face_test.py
+
+Checks that the landmark detector keeps measuring the **driver** when a second
+person is in view. It builds a 400-frame synthetic video from one frontal
+portrait pasted at two sizes — driver alone, second face appearing, second face
+sliding onto the driver anchor, driver gone, second face outside the zone — and
+asserts which face is returned in each phase and why (`single`, `lock`,
+`nearest anchor`, or none). No camera needed:
+
+```bat
+python evaluation\two_face_test.py --portrait path\to\frontal_photo.png
+```
+
+Any clear frontal photo works; the project's own run used MediaPipe's test
+image (`business-person.png` from the MediaPipe assets bucket), which is not
+committed here. The generated video lands in `data/` (git-ignored) and can be
+replayed in any demo with `--device data\two_faces.avi`.
+
+Result on 2026-09-13: all checks passed — driver kept in 100 % of the 200
+two-face frames, lone face inside the zone selected 100 %, lone face outside
+the zone rejected 100 %.
+
 ## results/stage3_live_observations.csv
 
 EAR and MAR values read from the HUD of the developer's Stage 3 test

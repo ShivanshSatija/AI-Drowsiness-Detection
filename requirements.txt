@@ -1,0 +1,30 @@
+# AI Driver Drowsiness Detection System
+# Python 3.10 or 3.11 (64-bit). Tested on Windows 11 with Python 3.11.
+#
+# Dependencies are added stage by stage so that a broken install in a later
+# stage can never break an earlier, already-working one.
+
+# --- Stage 1: camera capture + live preview -------------------------------
+numpy>=1.26,<2.0        # pinned <2.0: MediaPipe (Stage 2) is not NumPy-2 safe
+opencv-python>=4.8,<5.0
+
+# --- Stage 2: MediaPipe Face Mesh -----------------------------------------
+# mediapipe>=0.10.14,<0.11
+
+# --- Stage 7-8: eye-state CNN (training in Colab, inference locally) ------
+# torch>=2.2
+# torchvision>=0.17
+
+# --- Stage 10: laptop alerts ----------------------------------------------
+# pyttsx3>=2.90
+
+# --- Stage 11: ESP32 serial link ------------------------------------------
+# pyserial>=3.5
+
+# --- Stage 12: Streamlit dashboard + logging ------------------------------
+# streamlit>=1.33
+# pandas>=2.0
+
+# --- Stage 15: evaluation and plots ---------------------------------------
+# scikit-learn>=1.4
+# matplotlib>=3.8

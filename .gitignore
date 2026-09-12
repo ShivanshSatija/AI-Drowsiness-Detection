@@ -1,0 +1,63 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Virtual environments -------------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+
+# --- Editors / OS ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Project data ---------------------------------------------------------
+# Recorded video, captured frames and the MRL dataset stay off GitHub:
+# too large, and the test recordings contain subjects' faces.
+# Note: a negation cannot re-include a file inside an excluded DIRECTORY, so the
+# directory itself must be un-ignored first (!data/snapshots/) before its
+# .gitkeep can be tracked. Otherwise the folder disappears on a fresh clone.
+data/*
+!data/.gitkeep
+!data/README.md
+!data/snapshots/
+data/snapshots/*
+!data/snapshots/.gitkeep
+
+# Large or private media
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.zip
+*.tar.gz
+
+# --- Models ---------------------------------------------------------------
+# models/eye_cnn.pt IS committed (it is small and needed to run the system).
+# Training checkpoints are not.
+models/checkpoints/
+*.ckpt
+*.pth.tar
+
+# --- Secrets / local config ----------------------------------------------
+.env
+*.local.json
+secrets.*
+
+# --- Evaluation scratch ---------------------------------------------------
+evaluation/results/tmp/

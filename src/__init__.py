@@ -6,7 +6,8 @@ Modules are added stage by stage:
     landmarks.py  Stage 2  - MediaPipe Face Landmarker           [done]
     features.py   Stage 3  - EAR / MAR, Stage 4 - frame validity  [done]
     headpose.py   Stage 4  - head pose: yaw / pitch / roll        [done]
-    eye_cnn.py    Stage 7  - eye-state CNN loading + inference
+    eye_cnn.py    Stage 5  - eye crop preprocessing (shared with training) [done]
+                  Stage 7  - eye-state CNN loading + inference
     temporal.py   Stage 9  - PERCLOS / blink / yawn / nod, state machine
     alert.py      Stage 10 - escalating laptop alerts
     hardware.py   Stage 11 - ESP32 serial link

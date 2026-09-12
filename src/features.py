@@ -405,7 +405,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 4 - EAR / MAR / head pose / frame validity", 10, 24)
+    put("Stage 5 - EAR / MAR / head pose / validity / eye crops", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -451,14 +451,15 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
     _trace(frame, ear_trace, width - 210, height - 130, 200, 50, EAR_BAR_MAX, COLOR_EYE, "EAR mean")
     _trace(frame, mar_trace, width - 210, height - 72, 200, 50, MAR_BAR_MAX, COLOR_MOUTH, "MAR")
 
-    put("q=quit  m=mesh mode  g=gray input  p=pose method  z=zone  s=snapshot", 10, height - 12,
+    put("q quit  m mesh  g gray  p pose  z zone  c crops  e save eyes  s snapshot", 10, height - 12,
         (200, 200, 200), 0.5)
 
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 4 (EAR / MAR / Head Pose / Validity)"
+WINDOW_NAME = "Drowsiness Detection - Stage 5 (Features / Pose / Validity / Eye Crops)"
 TRACE_LENGTH = 200
+CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
 
 def _describe(name: str, values: List[float]) -> str:
@@ -473,10 +474,22 @@ def _describe(name: str, values: List[float]) -> str:
 def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "contours",
              mirror: bool = True, show_window: bool = True, max_frames: int = 0,
              record: Optional[Path] = None, pose_config: Optional[PoseConfig] = None,
-             validity_config: Optional[ValidityConfig] = None, show_zone: bool = True) -> int:
+             validity_config: Optional[ValidityConfig] = None, show_zone: bool = True,
+             eye_config=None, show_crops: bool = True, dump_crops: Optional[Path] = None,
+             dump_every: int = 30) -> int:
+    # Imported here, not at module level: eye_cnn imports the eye index sets
+    # from this module, so a top-level import would be circular.
+    from src.eye_cnn import (EyePreprocessConfig, draw_eye_boxes, draw_eye_panel,
+                             extract_eye_crops, save_eye_crops)
+
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
+    eye_config = eye_config or EyePreprocessConfig()
     tracker = InvalidFrameTracker(validity_config.window_seconds)
+    crops_total = 0
+    crops_valid = 0
+    eye_widths: List[float] = []
+    dumped = 0
     fps_counter = FPSCounter()
     mode_index = DRAW_MODES.index(mode)
     ear_trace: Deque[float] = deque(maxlen=TRACE_LENGTH)
@@ -505,8 +518,13 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                   else "<= {} deg".format(validity_config.max_abs_pitch_deg),
                   validity_config.min_face_width_px, validity_config.min_eye_width_px,
                   validity_config.edge_margin_px, validity_config.window_seconds))
+        print("[features] Eyes     : {}x{} crops, scale {} x eye width, roll alignment {}, CLAHE {}".format(
+            eye_config.size, eye_config.size, eye_config.crop_scale,
+            "on" if eye_config.align_roll else "off", "on" if eye_config.equalize else "off"))
+        if dump_crops:
+            print("[features] Dumping valid eye crops every {} frames to {}".format(dump_every, dump_crops))
         print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | "
-              "z driver zone on/off | s snapshot")
+              "z driver zone | c crop panel | e save eye crops | s snapshot")
         if show_window:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -522,6 +540,16 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             pose = estimate_pose(face, pose_config) if face is not None else None
             assessment = assess_frame(face, feats, pose, validity_config, detector.last_face_count)
             tracker.update(assessment)
+            crops = extract_eye_crops(frame, face, eye_config) if face is not None else (None, None)
+            for crop in crops:
+                if crop is not None:
+                    crops_total += 1
+                    crops_valid += int(crop.valid)
+                    eye_widths.append(crop.eye_width_px)
+            if (dump_crops and frame_index % dump_every == 0 and assessment.valid
+                    and all(c is not None and c.valid for c in crops)):
+                save_eye_crops(crops, dump_crops, tag="f{:06d}".format(frame_index))
+                dumped += 2
             fps = fps_counter.tick()
             inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
 
@@ -546,6 +574,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 if face is not None:
                     draw_landmarks(display, face, DRAW_MODES[mode_index])
                     draw_feature_geometry(display, face)
+                    draw_eye_boxes(display, crops)
                 if mirror:
                     display = cv2.flip(display, 1)
                 draw_ignored_faces(display, detector.last_ignored_boxes, mirror)
@@ -553,6 +582,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     draw_pose(display, face, pose, mirror)
                 draw_feature_hud(display, fps, inference_ms, feats, face, mirror, ear_trace, mar_trace,
                                  pose, assessment, tracker, detector.last_face_count)
+                if show_crops:
+                    draw_eye_panel(display, crops, 10, display.shape[0] - 140)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -569,6 +600,15 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     print("[features] pose method -> {}".format(pose_config.method))
                 if key == ord("z"):
                     show_zone = not show_zone
+                if key == ord("c"):
+                    show_crops = not show_crops
+                if key == ord("e"):
+                    if all(c is not None for c in crops):
+                        written = save_eye_crops(crops, tag="manual")
+                        written += save_eye_crops(crops, CROP_DIR_RAW, tag="manual", raw=True)
+                        print("[features] Saved eye crops: {}".format(", ".join(p.name for p in written)))
+                    else:
+                        print("[features] No eye crops to save (no face).")
                 if key == ord("s"):
                     print("[features] Saved {}".format(save_snapshot(display)))
                 if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
@@ -606,6 +646,14 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
     if tracker.reasons:
         print("[features] Invalid-frame reasons: " + ", ".join(
             "{} x{}".format(key, count) for key, count in tracker.reasons.most_common()))
+    if crops_total:
+        widths = np.array(eye_widths)
+        print("[features] Eye crops: {} produced, {} geometrically valid ({:.1%}); eye width px "
+              "min {:.0f} median {:.0f} max {:.0f}; raw crop side median {:.0f} px -> {}x{}".format(
+                  crops_total, crops_valid, crops_valid / crops_total, widths.min(), np.median(widths),
+                  widths.max(), np.median(widths) * eye_config.crop_scale, eye_config.size, eye_config.size))
+    if dump_crops:
+        print("[features] Dumped {} eye crop files to {}".format(dumped, dump_crops))
     return 0
 
 
@@ -767,6 +815,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-eye-px", type=float, default=15.0, help="Minimum eye width in px (default 15)")
     parser.add_argument("--window", type=float, default=60.0,
                         help="Rolling window in seconds for the invalid-frame rate (default 60)")
+    parser.add_argument("--eye-size", type=int, default=64, help="Eye crop output size in px (default 64)")
+    parser.add_argument("--crop-scale", type=float, default=1.5,
+                        help="Crop side as a multiple of the eye-corner distance (default 1.5, verify vs MRL)")
+    parser.add_argument("--no-align", action="store_true", help="Do not rotate crops to level the eye")
+    parser.add_argument("--no-crops", action="store_true", help="Start with the eye-crop panel hidden ('c' toggles)")
+    parser.add_argument("--dump-crops", type=Path, default=None,
+                        help="Save valid eye crops from VALID frames to this folder (e.g. data/eye_crops/session1)")
+    parser.add_argument("--dump-every", type=int, default=30, help="With --dump-crops: every N frames (default 30)")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
     parser.add_argument("--no-zone", action="store_true",
                         help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
@@ -794,11 +850,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_eye_width_px=args.min_eye_px,
         window_seconds=args.window,
     )
+    from src.eye_cnn import EyePreprocessConfig  # lazy: see run_demo
+    eye_config = EyePreprocessConfig(size=args.eye_size, crop_scale=args.crop_scale,
+                                     align_roll=not args.no_align, min_eye_width_px=args.min_eye_px)
     try:
         return run_demo(create_source(camera), detector, mode=args.mode, mirror=not args.no_mirror,
                         show_window=not args.no_window, max_frames=args.max_frames, record=args.record,
                         pose_config=pose_config, validity_config=validity_config,
-                        show_zone=not args.no_zone)
+                        show_zone=not args.no_zone, eye_config=eye_config, show_crops=not args.no_crops,
+                        dump_crops=args.dump_crops, dump_every=args.dump_every)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

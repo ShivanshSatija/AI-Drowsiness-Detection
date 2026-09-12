@@ -7,7 +7,7 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 4 of 15 complete** (camera → landmarks → EAR / MAR → head pose → VALID / INVALID frames).
+> **Status: Stage 5 of 15 complete** (camera → landmarks → EAR / MAR → head pose → frame validity → eye crops ready for the CNN).
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -71,7 +71,7 @@ AI-Drowsiness-Detection/
 │   ├── landmarks.py        MediaPipe Face Landmarker           [Stage 2]
 │   ├── features.py         EAR / MAR, frame validity gate      [Stages 3-4]
 │   ├── headpose.py         head pose: yaw / pitch / roll       [Stage 4]
-│   ├── eye_cnn.py          eye-state CNN inference             [Stages 7-8]
+│   ├── eye_cnn.py          eye crop preprocessing [Stage 5], CNN [Stages 7-8]
 │   ├── temporal.py         PERCLOS / blink / yawn / nod + FSM  [Stage 9]
 │   ├── alert.py            escalating laptop alerts            [Stage 10]
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
@@ -123,6 +123,63 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 5 — eye crops, preprocessed exactly as the CNN will see them
+
+```bat
+python -m src.features                                :: live: everything so far + both eye crops in a panel
+python -m src.features --dump-crops data\eye_crops\s1 :: also save valid crops from VALID frames every 30 frames
+python -m src.features --crop-scale 1.7 --eye-size 48 :: try other crop geometry / output size
+python -m src.eye_cnn --image path\to\eye.png         :: run the shared preprocessing on one file (MRL sample, saved crop)
+python -m src.eye_cnn --self-test                     :: geometry, alignment, contract and I/O checks, no camera
+```
+
+Keys added: **`c`** hide / show the crop panel · **`e`** save both crops now
+(64 × 64 gray to `data/eye_crops/`, un-resized raw to `data/eye_crops/raw/`).
+
+**What Stage 5 produces** ([`src/eye_cnn.py`](src/eye_cnn.py)):
+
+| Step | Detail |
+|---|---|
+| Locate | Eye centre = mean of the six EAR landmarks (33/160/158/133/153/144 right, 362/385/387/263/373/380 left); eye width = corner distance |
+| Crop | Square, side = **1.5 ×** eye width, rotated so the eye corners are horizontal (`align_roll`), edge-replicated if it leaves the frame — one `warpAffine` does rotation, crop and padding |
+| Grayscale | `cv2.COLOR_BGR2GRAY`; already-gray input (MRL) passes through |
+| Resize | **64 × 64**, `INTER_AREA` when shrinking, `INTER_LINEAR` when enlarging |
+| Normalise | float32 in [0, 1], then per-image standardisation to mean 0 / std 1 (flat image → zeros). Optional CLAHE (`equalize`, off) kept for the Stage 7 ablation |
+| Validity | geometric only: eye width < 15 px or crop partly outside the frame → `valid=False` with a reason; the image is still produced for display. Stage 8 will additionally require Stage 4's frame to be VALID |
+
+**The one rule that prevents train/inference mismatch:**
+`preprocess_eye_image(image, config)` is the *only* function allowed to prepare
+CNN input. Live crops go through it inside `crop_eye`; the MRL training
+pipeline (Stage 6) and inference (Stage 8) must call the same function with
+the same `EyePreprocessConfig`. The self-test asserts this contract bit for
+bit: the shared function applied to a live raw crop reproduces the live
+tensor exactly, and a crop saved to PNG re-preprocesses to the identical
+tensor.
+
+Two decisions that bind later stages, both deliberate:
+
+- **No left / right flipping.** MRL does not label which eye an image shows, so
+  the classifier must be side-agnostic; horizontal flips become a training
+  augmentation instead.
+- **`crop_scale = 1.5` and `size = 64` are initial values.** MRL images are
+  tight, roughly square eye crops. Stage 6 puts real MRL samples next to crops
+  saved by this stage (`e` key or `--dump-crops`) and adjusts the scale until
+  they look alike — *before* any training. Per-image standardisation, rather
+  than a dataset mean/std, is what makes MRL's infrared sensors and our
+  webcam / NoIR camera comparable in brightness and contrast.
+
+**Measured so far (Stage 5):**
+
+| Run | Result |
+|---|---|
+| Self-test, synthetic eye tilted 20° | crop centred within 2 px; tilt after alignment **0.0°** (19.9° without); contract holds bit for bit; saved PNG re-preprocesses identically |
+| True-aspect test portrait video, 300 frames | 600 crops, **100 % valid**; eye width 32–36 px → raw crop 51 px, *enlarged* to 64 × 64 |
+| Live test with the developer's face | **pending** — at laptop distance the eyes measured ~50–60 px wide in Stage 3, so raw crops of ~75–90 px will be *shrunk* to 64 × 64, close to MRL's native resolution |
+
+The portrait's eyes are small enough that its crops are upsampled — soft but
+usable. Below the 15 px eye-width gate a crop is flagged invalid rather than
+fed onward.
 
 ### Stage 4 — head pose and frame validity
 
@@ -396,7 +453,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 2 | MediaPipe Face Landmarker — 478 real-time landmarks | ✅ done |
 | 3 | EAR + MAR from landmarks, live display + CSV recording | ✅ done |
 | 4 | Head pose (yaw / pitch / roll) + INVALID-frame gate + invalid-frame rate | ✅ done |
-| 5 | Eye-region cropping and preprocessing | ⬜ |
+| 5 | Eye-region cropping + preprocessing shared with training | ✅ done |
 | 6 | MRL eye dataset preparation (subject-independent split) | ⬜ |
 | 7 | Eye-state CNN training and evaluation | ⬜ |
 | 8 | CNN integrated into the live pipeline | ⬜ |

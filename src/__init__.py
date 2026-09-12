@@ -3,7 +3,7 @@
 Modules are added stage by stage:
 
     capture.py    Stage 1  - camera abstraction + live preview   [done]
-    landmarks.py  Stage 2  - MediaPipe Face Mesh
+    landmarks.py  Stage 2  - MediaPipe Face Landmarker           [done]
     features.py   Stage 3  - EAR / MAR, Stage 4 - head pose
     eye_cnn.py    Stage 7  - eye-state CNN loading + inference
     temporal.py   Stage 9  - PERCLOS / blink / yawn / nod, state machine

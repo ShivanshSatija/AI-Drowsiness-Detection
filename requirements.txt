@@ -1,15 +1,23 @@
 # AI Driver Drowsiness Detection System
-# Python 3.10 or 3.11 (64-bit). Tested on Windows 11 with Python 3.11.
+# Python 3.10 or 3.11 (64-bit). Tested on Windows 11 with Python 3.11.9.
 #
 # Dependencies are added stage by stage so that a broken install in a later
 # stage can never break an earlier, already-working one.
+#
+# IMPORTANT: use opencv-contrib-python, never opencv-python alongside it.
+# MediaPipe depends on opencv-contrib-python; installing both puts two
+# different builds into the same cv2/ folder and produces a corrupted install.
+# If you already have opencv-python:  pip uninstall -y opencv-python
 
 # --- Stage 1: camera capture + live preview -------------------------------
-numpy>=1.26,<2.0        # pinned <2.0: MediaPipe (Stage 2) is not NumPy-2 safe
-opencv-python>=4.8,<5.0
+numpy>=2.0,<3
+opencv-contrib-python==4.11.0.86
 
-# --- Stage 2: MediaPipe Face Mesh -----------------------------------------
-# mediapipe>=0.10.14,<0.11
+# --- Stage 2: MediaPipe Face Landmarker (Tasks API) ------------------------
+# 0.10.35 no longer ships the legacy mp.solutions.face_mesh module; the code
+# uses mediapipe.tasks.python.vision.FaceLandmarker. Model file is committed
+# at models/face_landmarker.task.
+mediapipe==0.10.35
 
 # --- Stage 7-8: eye-state CNN (training in Colab, inference locally) ------
 # torch>=2.2
@@ -27,4 +35,4 @@ opencv-python>=4.8,<5.0
 
 # --- Stage 15: evaluation and plots ---------------------------------------
 # scikit-learn>=1.4
-# matplotlib>=3.8
+# matplotlib>=3.8   (already pulled in by mediapipe)

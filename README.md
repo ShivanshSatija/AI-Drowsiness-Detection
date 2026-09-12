@@ -7,7 +7,7 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 1 of 15 complete** (camera capture + live preview).
+> **Status: Stage 2 of 15 complete** (camera capture + real-time facial landmarks).
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -68,7 +68,7 @@ AI-Drowsiness-Detection/
 ├── .gitignore
 ├── src/
 │   ├── capture.py          camera abstraction + live preview   [Stage 1]
-│   ├── landmarks.py        MediaPipe Face Mesh                 [Stage 2]
+│   ├── landmarks.py        MediaPipe Face Landmarker           [Stage 2]
 │   ├── features.py         EAR / MAR / head pose               [Stages 3-4]
 │   ├── eye_cnn.py          eye-state CNN inference             [Stages 7-8]
 │   ├── temporal.py         PERCLOS / blink / yawn / nod + FSM  [Stage 9]
@@ -76,7 +76,9 @@ AI-Drowsiness-Detection/
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
 │   └── app.py              Streamlit dashboard                 [Stage 12]
 ├── training/               MRL dataset prep + CNN training     [Stages 6-7]
-├── models/                 trained eye_cnn.pt                  [Stage 7]
+├── models/
+│   ├── face_landmarker.task  MediaPipe face model (official)   [Stage 2]
+│   └── eye_cnn.pt            trained eye-state CNN             [Stage 7]
 ├── hardware/               ESP32 sketch, wiring, photos        [Stage 11]
 ├── evaluation/
 │   ├── camera_baseline.py  camera acceptance test + baseline   [Stage 1]
@@ -114,7 +116,48 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+The requirements use **`opencv-contrib-python`** (MediaPipe's dependency), not
+`opencv-python`. Never install both: they unpack two different builds into the
+same `cv2/` folder and the result is corrupt. If `opencv-python` is already
+present, `pip uninstall -y opencv-python` first.
+
 ## 6. Running the current stage
+
+### Stage 2 — live facial landmarks
+
+```bat
+python -m src.landmarks                :: live camera, face contours + irises drawn
+python -m src.landmarks --mode mesh    :: full 468-triangle tesselation
+python -m src.landmarks --gray         :: feed grayscale frames (rehearsal for the IR camera)
+python -m src.landmarks --no-window --max-frames 300   :: headless: detection rate + timing only
+python -m src.landmarks --self-test    :: model integrity + code checks, no camera needed
+```
+
+Keys: **`q`**/**`Esc`** quit · **`m`** cycle draw mode (contours → mesh → points → off) ·
+**`g`** toggle grayscale input · **`s`** snapshot. The HUD shows FPS, MediaPipe
+inference time, FACE FOUND / NO FACE DETECTED, and the running detection rate.
+
+**What Stage 2 produces for later stages.** `FaceLandmarkDetector.process(frame)`
+returns a `FaceLandmarks` object (or `None` when no face is present) holding a
+`(478, 3)` array in MediaPipe's canonical face-mesh topology, plus `pixels`,
+`points(indices)` and `bounding_box()` helpers. Two rules downstream code relies on:
+
+- **Left/right mean the *subject's* left and right.** That only holds if the
+  model sees the un-mirrored camera frame, so detection always runs on the raw
+  frame and the mirror-image view is applied to the *display* afterwards.
+  Verified empirically: landmark 263 (subject's left eye) sits at larger *x*
+  than landmark 33 (right eye) in the raw frame.
+- **No face → `None`, never a stale or zero result.** Stage 4 will turn this
+  into an explicit INVALID frame; nothing downstream should ever interpret a
+  missing face as closed eyes.
+
+Measured on this laptop (640 × 480, CPU): MediaPipe inference **~4 ms** per frame
+with no face in view and **~7–8 ms** with a face; 478 landmarks; grayscale input
+detected the same face at the same rate as RGB. End-to-end throughput is set by
+the camera (~19 FPS live), not by MediaPipe — the same loop runs at 54 FPS with
+rendering and 96 FPS headless when reading from a video file.
+
+### Stage 1 — camera only
 
 ```bat
 python -m src.capture                 :: live camera preview
@@ -131,7 +174,9 @@ In the preview window: **`q`** or **`Esc`** quits, **`s`** saves a snapshot to
 
 Recorded 2026-09-13 so that Stage 13 has a real before/after reference for the
 NoIR conversion. Windows 11, Python 3.11.9, OpenCV 4.11.0.86, NumPy 1.26.4,
-indoor artificial lighting. All figures are measured, not estimated.
+indoor artificial lighting. All figures are measured, not estimated. (Stage 2
+moved the environment to NumPy 2.4.6 and `opencv-contrib-python` 4.11.0.86; the
+acceptance test was re-run afterwards and passed 13/13 with identical behaviour.)
 
 | Property | Measured value |
 |---|---|
@@ -169,7 +214,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | # | Stage | Status |
 |---|---|---|
 | 1 | Project foundation + webcam capture | ✅ done |
-| 2 | MediaPipe Face Mesh landmarks | ⬜ |
+| 2 | MediaPipe Face Landmarker — 478 real-time landmarks | ✅ done |
 | 3 | EAR + MAR | ⬜ |
 | 4 | Head pose + invalid-frame handling | ⬜ |
 | 5 | Eye-region cropping and preprocessing | ⬜ |

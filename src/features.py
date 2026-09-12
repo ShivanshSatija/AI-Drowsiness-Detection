@@ -82,6 +82,7 @@ from src.headpose import POSE_METHODS, HeadPose, PoseConfig, draw_pose, estimate
 from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
                            LandmarkConfig, LandmarkModelError, draw_driver_zone,
                            draw_ignored_faces, draw_landmarks)
+from src.temporal import Observation, TemporalConfig, TemporalEngine, TemporalState, draw_temporal_panel
 
 # --- landmark index sets (MediaPipe canonical topology) ---------------------
 # Order matters: p1..p6 for the EAR formula.
@@ -293,6 +294,8 @@ class FeatureRecorder:
     POSE_FIELDS = ["yaw_deg", "pitch_deg", "roll_deg", "pose_method"]
     VALIDITY_FIELDS = ["valid", "invalid_reasons"]
     CNN_FIELDS = ["cnn_left_state", "cnn_left_conf", "cnn_right_state", "cnn_right_conf", "cnn_ms"]
+    TEMPORAL_FIELDS = ["state", "perclos", "blink_rate_per_min", "mean_blink_s", "closure_now_s",
+                       "yawn_rate_per_min", "nod_count", "invalid_rate", "sufficient"]
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -305,11 +308,12 @@ class FeatureRecorder:
         self._file = open(self.path, "w", newline="", encoding="utf-8")
         self._writer = csv.writer(self._file)
         self._writer.writerow(["frame", "face_found", "inference_ms"] + GeometricFeatures.csv_fields()
-                              + self.POSE_FIELDS + self.VALIDITY_FIELDS + self.CNN_FIELDS)
+                              + self.POSE_FIELDS + self.VALIDITY_FIELDS + self.CNN_FIELDS + self.TEMPORAL_FIELDS)
 
     def write(self, frame_index: int, inference_ms: float, feats: Optional[GeometricFeatures],
               pose: Optional[HeadPose] = None, assessment: Optional[FrameAssessment] = None,
-              eye_states: Optional[Sequence] = None, cnn_ms: float = 0.0) -> None:
+              eye_states: Optional[Sequence] = None, cnn_ms: float = 0.0,
+              temporal: Optional[TemporalState] = None) -> None:
         values = ([getattr(feats, name) for name in GeometricFeatures.csv_fields()]
                   if feats is not None else [""] * len(GeometricFeatures.csv_fields()))
         pose_values = ([round(pose.yaw_deg, 2), round(pose.pitch_deg, 2), round(pose.roll_deg, 2), pose.method]
@@ -319,8 +323,10 @@ class FeatureRecorder:
         for state in (eye_states or [None, None]):
             cnn_values += [state[0], round(state[1], 4)] if state else ["", ""]
         cnn_values.append(round(cnn_ms, 2) if eye_states else "")
+        temporal_values = ([temporal.as_row()[k] for k in self.TEMPORAL_FIELDS] if temporal is not None
+                           else [""] * len(self.TEMPORAL_FIELDS))
         self._writer.writerow([frame_index, int(feats is not None), round(inference_ms, 2)]
-                              + values + pose_values + validity + cnn_values)
+                              + values + pose_values + validity + cnn_values + temporal_values)
         self.rows += 1
 
     def close(self) -> None:
@@ -418,7 +424,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 8 - features / pose / validity / eye-state CNN", 10, 24)
+    put("Stage 9 - features / pose / validity / CNN / temporal", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -489,7 +495,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 8 (Features / Pose / Validity / Eye-state CNN)"
+WINDOW_NAME = "Drowsiness Detection - Stage 9 (Features / Pose / Validity / CNN / Temporal)"
 TRACE_LENGTH = 200
 CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
@@ -509,10 +515,14 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              validity_config: Optional[ValidityConfig] = None, show_zone: bool = True,
              eye_config: Optional[EyePreprocessConfig] = None, show_crops: bool = True,
              dump_crops: Optional[Path] = None, dump_every: int = 30,
-             classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "") -> int:
+             classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "",
+             temporal_config: Optional[TemporalConfig] = None) -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
+    temporal = TemporalEngine(temporal_config or TemporalConfig())
+    temporal_state: Optional[TemporalState] = None
+    time_in_state: Counter = Counter()
     tracker = InvalidFrameTracker(validity_config.window_seconds)
     crops_total = 0
     crops_valid = 0
@@ -562,6 +572,13 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 "{:.4f}".format(meta["test_accuracy"]) if "test_accuracy" in meta else "n/a"))
         else:
             print("[features] CNN      : {}".format(cnn_status or "disabled"))
+        tc = temporal.config
+        print("[features] Temporal : {:.0f} s window | eyes {} | PERCLOS mild {:.2f}/{:.2f} drowsy {:.2f}/{:.2f} "
+              "(enter/exit) | microsleep {:.1f} s | yawn MAR >= {:.2f} for {:.1f} s | nod drop {:.0f} deg | "
+              "dwell up {:.0f} s down {:.0f} s".format(
+                  tc.window_s, tc.fusion, tc.perclos_mild_enter, tc.perclos_mild_exit, tc.perclos_drowsy_enter,
+                  tc.perclos_drowsy_exit, tc.microsleep_s, tc.mar_yawn_thr, tc.min_yawn_s, tc.nod_drop_deg,
+                  tc.up_dwell_s, tc.down_dwell_s))
         print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | "
               "z driver zone | c crop panel | e save eye crops | s snapshot")
         if show_window:
@@ -603,6 +620,23 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                         if state is not None:
                             cnn_counts[side][state[0]] += 1
                             cnn_confidences.append(state[1])
+            # Stage 9: feed the temporal layer. Invalid frames go in flagged so the
+            # window can count them; their measurements are ignored inside.
+            closed_probs = [(st[1] if st[0] == "CLOSED" else 1.0 - st[1]) for st in (eye_states or []) if st]
+            observation = Observation(
+                t=assessment.time_s, valid=assessment.valid,
+                ear=feats.ear_mean if feats is not None else None,
+                mar=feats.mar if feats is not None else None,
+                pitch_deg=pose.pitch_deg if (pose is not None and pose.ok) else None,
+                cnn_closed_prob=float(np.mean(closed_probs)) if closed_probs else None)
+            previous_state = temporal_state.state if temporal_state is not None else None
+            temporal_state = temporal.update(observation)
+            if previous_state is not None:
+                time_in_state[previous_state] += 1
+            if temporal.transitions and temporal.transitions[-1][0] == observation.t:
+                _, from_state, to_state, why = temporal.transitions[-1]
+                print("[temporal] {:7.1f} s  {} -> {}  ({})".format(
+                    observation.t - temporal._frames[0][0] if temporal._frames else 0.0, from_state, to_state, why))
             fps = fps_counter.tick()
             inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
 
@@ -618,7 +652,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 pitches.append(pose.pitch_deg)
                 rolls.append(pose.roll_deg)
             if recorder:
-                recorder.write(frame_index, inference_ms, feats, pose, assessment, eye_states, cnn_ms)
+                recorder.write(frame_index, inference_ms, feats, pose, assessment, eye_states, cnn_ms,
+                               temporal_state)
 
             if show_window:
                 display = frame.copy()
@@ -638,6 +673,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                                  eye_states, cnn_ms, cnn_status if classifier is None else "")
                 if show_crops:
                     draw_eye_panel(display, crops, 10, display.shape[0] - 140, states=eye_states)
+                if temporal_state is not None:
+                    draw_temporal_panel(display, temporal_state, display.shape[1] - 250, 46)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -714,6 +751,18 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                   dict(cnn_counts["left"]), dict(cnn_counts["right"]),
                   float(np.mean(cnn_confidences)) if cnn_confidences else float("nan"),
                   float(np.median(cnn_times))))
+    if temporal_state is not None:
+        ts = temporal_state
+        total = sum(time_in_state.values()) or 1
+        print("[temporal] final: {} | PERCLOS {:.1%} | blinks {} in window ({:.1f}/min{}) | longest closure "
+              "{:.2f} s | yawns {} | nods {} | invalid {:.1%} | window {:.0f} s".format(
+                  ts.state, ts.perclos, ts.blink_count, ts.blink_rate_per_min,
+                  "" if math.isnan(ts.mean_blink_s) else ", mean {:.0f} ms".format(ts.mean_blink_s * 1000),
+                  ts.longest_closure_s, ts.yawn_count, ts.nod_count, ts.invalid_rate, ts.window_fill_s))
+        print("[temporal] frames per state: " + ", ".join(
+            "{} {:.0%}".format(name, time_in_state[name] / total) for name in ("ALERT", "MILD", "DROWSY")))
+        print("[temporal] transitions: {}".format(
+            "; ".join("{} -> {} ({})".format(a, b, why) for _, a, b, why in temporal.transitions) or "none"))
     return 0
 
 
@@ -886,6 +935,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", type=Path, default=MODEL_PATH,
                         help="Eye-state CNN checkpoint (default models/eye_cnn.pt)")
     parser.add_argument("--no-cnn", action="store_true", help="Run without the eye-state CNN")
+    parser.add_argument("--fusion", choices=("cnn", "ear", "fused"), default="fused",
+                        help="How a frame is judged eyes-closed for the temporal layer (default fused)")
+    parser.add_argument("--perclos-mild", type=float, default=0.15, help="PERCLOS to enter MILD (default 0.15, untuned)")
+    parser.add_argument("--perclos-drowsy", type=float, default=0.30,
+                        help="PERCLOS to enter DROWSY (default 0.30, untuned)")
+    parser.add_argument("--microsleep", type=float, default=1.5,
+                        help="Closure in seconds that forces DROWSY (default 1.5, untuned)")
+    parser.add_argument("--yawn-mar", type=float, default=0.60, help="MAR threshold for a yawn (default 0.60, untuned)")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
     parser.add_argument("--no-zone", action="store_true",
                         help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
@@ -934,13 +991,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             cnn_status = "PyTorch missing - running without it"
             print("[features] {}".format(exc), file=sys.stderr)
 
+    temporal_config = TemporalConfig(
+        window_s=args.window, fusion=args.fusion, perclos_mild_enter=args.perclos_mild,
+        perclos_mild_exit=round(args.perclos_mild * 2 / 3, 3), perclos_drowsy_enter=args.perclos_drowsy,
+        perclos_drowsy_exit=round(args.perclos_drowsy * 0.73, 3), microsleep_s=args.microsleep,
+        mar_yawn_thr=args.yawn_mar)
+
     try:
         return run_demo(create_source(camera), detector, mode=args.mode, mirror=not args.no_mirror,
                         show_window=not args.no_window, max_frames=args.max_frames, record=args.record,
                         pose_config=pose_config, validity_config=validity_config,
                         show_zone=not args.no_zone, eye_config=eye_config, show_crops=not args.no_crops,
                         dump_crops=args.dump_crops, dump_every=args.dump_every,
-                        classifier=classifier, cnn_status=cnn_status)
+                        classifier=classifier, cnn_status=cnn_status, temporal_config=temporal_config)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

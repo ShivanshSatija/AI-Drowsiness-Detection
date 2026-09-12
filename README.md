@@ -7,13 +7,13 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stages 1–6 of 15 complete; Stage 7 training in progress.**
-> Camera → landmarks → EAR / MAR → head pose → frame validity → eye crops all
-> work live. The MRL Eye Dataset has been inspected and split by subject
-> (84,898 images, 37 subjects, no subject in two splits). The CNN, augmentation,
-> training script and Colab notebook are built; the first real training run is
-> under way and its measured results will be added here when it finishes.
-> **No eye-state accuracy is claimed until then.**
+> **Status: Stages 1–6 complete; Stage 7 training in progress; Stage 8 and 9
+> code complete and verified, awaiting the trained model for their live tests.**
+> Camera → landmarks → EAR / MAR → head pose → frame validity → eye crops →
+> (CNN) → 60 s temporal analysis → ALERT / MILD / DROWSY all run end to end.
+> The first real CNN training run is under way and its measured results will
+> be added here when it finishes. **No eye-state accuracy is claimed until
+> then, and every temporal threshold is an untuned initial value.**
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -78,7 +78,7 @@ AI-Drowsiness-Detection/
 │   ├── features.py         EAR / MAR, frame validity gate      [Stages 3-4]
 │   ├── headpose.py         head pose: yaw / pitch / roll       [Stage 4]
 │   ├── eye_cnn.py          eye crop preprocessing [Stage 5], CNN [Stages 7-8]
-│   ├── temporal.py         PERCLOS / blink / yawn / nod + FSM  [Stage 9]
+│   ├── temporal.py         60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis, replay [Stage 9]
 │   ├── alert.py            escalating laptop alerts            [Stage 10]
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
 │   └── app.py              Streamlit dashboard                 [Stage 12]
@@ -134,6 +134,77 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 9 — temporal drowsiness analysis and the ALERT / MILD / DROWSY state machine
+
+```bat
+python -m src.features                                    :: live: everything so far + temporal panel (top right)
+python -m src.features --record data\session.csv          :: record a session (acted drowsiness) for replay / tuning
+python -m src.temporal --replay data\session.csv --plot data\session.png   :: offline replay: metrics, transitions, plot
+python -m src.features --fusion ear                       :: eye-closure source: cnn | ear | fused (default)
+python -m src.features --perclos-mild 0.12 --perclos-drowsy 0.25 --microsleep 1.0 --yawn-mar 0.5
+python -m src.temporal --self-test                        :: 11 synthetic scenarios, no camera
+```
+
+**What it computes** ([`src/temporal.py`](src/temporal.py)) — all over a
+**60 s sliding window**, using only frames Stage 4 marked VALID:
+
+| Quantity | Definition |
+|---|---|
+| Per-frame eye closure | fused probability = mean of the CNN's P(CLOSED) over the available eyes and a soft EAR indicator, sigmoid((0.20 − EAR) / 0.03); closed when ≥ 0.5. `--fusion cnn` / `ear` isolate one source (Stage 15 ablation) |
+| **PERCLOS** | closed valid frames ÷ valid frames with an eye reading |
+| Closure events | a run of closed frames: < 80 ms is noise, 80–500 ms a **blink**, longer a **prolonged closure**, ≥ 1.5 s a **microsleep**. An invalid gap ≤ 0.3 s inside a run pauses it instead of splitting it |
+| **Mean blink duration**, blink rate | over blinks completed inside the window |
+| **Yawn rate** | MAR ≥ 0.60 sustained ≥ 1.0 s, counted per minute of window |
+| **Head nod count** | pitch dropping ≥ 15° below the window's median pitch for 0.3–3 s and recovering; longer drops are "looking down", not nods |
+| **Invalid-frame rate** | invalid ÷ all frames in the window — the only statistic invalid frames contribute to |
+
+**A single closed frame never means drowsiness:** it moves PERCLOS by one frame
+and can at most start a closure event; only window statistics and event
+durations reach the state machine. Before 60 valid frames (~3 s), or when more
+than 60 % of the window is invalid, the metrics are flagged *insufficient* and
+the state holds.
+
+**State machine with hysteresis.** Enter and exit thresholds differ (Schmitt
+trigger), escalation needs its condition to hold for **2 s**, de-escalation
+needs the exit condition for **10 s** plus a minimum stay of 5 s in MILD /
+10 s in DROWSY. The one exception is a microsleep — a closure ≥ 1.5 s, i.e.
+~30 consecutive frames — which enters DROWSY immediately.
+
+| Transition | Condition |
+|---|---|
+| → **MILD** | PERCLOS ≥ 0.15, **or** ≥ 2 yawns, **or** ≥ 2 nods, **or** ≥ 2 closures ≥ 0.5 s in the window |
+| → **DROWSY** | PERCLOS ≥ 0.30, **or** PERCLOS ≥ 0.15 with ≥ 3 yawns + nods, **or** a microsleep |
+| DROWSY → MILD / ALERT | PERCLOS < 0.22 and no microsleep in the window, held 10 s, after ≥ 10 s in DROWSY |
+| MILD → ALERT | PERCLOS < 0.10 and no supporting events, held 10 s, after ≥ 5 s in MILD |
+
+**Threshold provenance — read this before quoting any number.**
+
+| Value | Setting | Status |
+|---|---|---|
+| EAR "closed" centre 0.20 (soft width 0.03) | `ear_closed_thr` | **INITIAL, bracketed by MEASURED data**: developer open 0.34–0.40, closed 0.05–0.19 (Stages 3/5). Per-person — needs calibration |
+| MAR yawn 0.60 for ≥ 1.0 s | `mar_yawn_thr`, `min_yawn_s` | **INITIAL, bracketed by MEASURED data**: closed ≤ 0.05, wide open 0.87–1.00. Talking untested → **TUNE** |
+| Blink 80–500 ms | `min_blink_s`, `max_blink_s` | INITIAL (literature 100–400 ms; one frame at 20 FPS = 50 ms) |
+| Microsleep 1.5 s | `microsleep_s` | INITIAL, conservative (literature 0.5–1 s +) → **TUNE** |
+| PERCLOS 0.15 / 0.10 (MILD enter / exit), 0.30 / 0.22 (DROWSY) | `perclos_*` | INITIAL from the driver-monitoring literature (PERCLOS levels of Wierwille et al. / NHTSA) → **TUNE on own recordings** |
+| 2 yawns, 2 nods or 2 long closures → MILD; 3 yawns + nods lift PERCLOS-mild to DROWSY | `yawns_mild`, `nods_mild`, `long_closures_mild`, `support_for_drowsy` | INITIAL → **TUNE** |
+| Nod = 15° drop, 0.3–3 s | `nod_drop_deg`, `min/max_nod_s` | INITIAL → **TUNE** (uses pitch *changes* — Stage 4 measured a −11° rest offset on the laptop) |
+| Dwell 2 s up / 10 s down; holds 5 s / 10 s | `*_dwell_s`, `*_min_hold_s` | INITIAL engineering values → **TUNE** |
+| Window 60 s; sufficiency 60 valid frames, ≤ 60 % invalid | `window_s`, `min_valid_frames`, `max_invalid_rate` | roadmap requirement; INITIAL |
+
+**Verified so far:** the 11-scenario self-test (20 FPS synthetic streams) —
+eyes open → ALERT; one closed frame → no event, PERCLOS 0.3 %; 150 ms blinks
+every 4 s → 15 blinks/min, mean 157 ms, PERCLOS 3.9 %, ALERT; a 2 s closure →
+still ALERT at 1 s, DROWSY at 1.5 s, held; 40 % closure → DROWSY after the
+minimum 5 s (3 s sufficiency + 2 s dwell), then graded recovery DROWSY → MILD
+(while the long closures age out of the window) → ALERT with no flapping;
+PERCLOS hovering 12–16 % → at most 2 transitions in 120 s (no
+flapping); 3 yawns → MILD; 3 nods against a −10° baseline; 30 % invalid frames
+with closed eyes → PERCLOS stays 0; 70 % invalid → flagged insufficient; fusion
+fallbacks; CSV replay of a 3 s closure → DROWSY. The integrated live loop and
+the replay tool ran on the test-portrait video (eyes open: ALERT, PERCLOS 0 %).
+**Not yet measured:** behaviour on a real acted-drowsiness recording — that is
+the Stage 9 live test, and its recording is what the thresholds get tuned on.
 
 ### Stage 6 — MRL Eye Dataset: what it really is, and how it was split
 
@@ -577,8 +648,8 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 5 | Eye-region cropping + preprocessing shared with training | ✅ done |
 | 6 | MRL eye dataset: inspected, subject-independent split built and verified, packs written | ✅ done |
 | 7 | Eye-state CNN training and evaluation | 🔶 code complete; first real run training — results pending |
-| 8 | CNN integrated into the live pipeline | ⬜ |
-| 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ⬜ |
+| 8 | CNN integrated into the live pipeline | 🔶 integrated and verified with interim weights; live test waits for the final model |
+| 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | 🔶 implemented, 11 synthetic scenarios pass, replay tool; thresholds are initial values — live acted-drowsiness test pending |
 | 10 | Escalating laptop alert system | ⬜ |
 | 11 | ESP32 + buzzer physical alarm | ⬜ |
 | 12 | Streamlit dashboard + event logging | ⬜ |

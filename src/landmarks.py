@@ -505,7 +505,7 @@ def draw_hud(frame: np.ndarray, fps: float, face: Optional[FaceLandmarks],
         cv2.putText(frame, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1, cv2.LINE_AA)
         y += 22
 
-    cv2.putText(frame, "q=quit  m=draw mode  g=gray input  s=snapshot", (10, height - 12),
+    cv2.putText(frame, "q=quit  m=draw mode  g=gray input  z=zone  s=snapshot", (10, height - 12),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
 
@@ -515,7 +515,8 @@ WINDOW_NAME = "Drowsiness Detection - Stage 2 (Face Landmarks)"
 
 
 def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "contours",
-             mirror: bool = True, show_window: bool = True, max_frames: int = 0) -> int:
+             mirror: bool = True, show_window: bool = True, max_frames: int = 0,
+             show_zone: bool = True) -> int:
     fps_counter = FPSCounter()
     mode_index = DRAW_MODES.index(mode)
     started = time.perf_counter()
@@ -526,7 +527,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
         print("[landmarks] Driver : anchor {}  zone radius {}  lock radius {}".format(
             detector.config.driver_anchor, detector.config.driver_zone_radius,
             detector.config.lock_radius))
-        print("[landmarks] Keys   : q/ESC quit | m draw mode | g gray input | s snapshot")
+        print("[landmarks] Keys   : q/ESC quit | m draw mode | g gray input | z driver zone on/off | s snapshot")
         if show_window:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -541,7 +542,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
 
             if show_window:
                 display = frame.copy()
-                draw_driver_zone(display, detector.config)
+                if show_zone:
+                    draw_driver_zone(display, detector.config)
                 if face is not None:
                     draw_landmarks(display, face, DRAW_MODES[mode_index])
                 if mirror:
@@ -559,6 +561,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     mode_index = (mode_index + 1) % len(DRAW_MODES)
                 if key == ord("g"):
                     detector.config.grayscale_input = not detector.config.grayscale_input
+                if key == ord("z"):
+                    show_zone = not show_zone
                 if key == ord("s"):
                     print("[landmarks] Saved {}".format(save_snapshot(display)))
                 if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
@@ -692,6 +696,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--zone", type=float, default=0.40,
                         help="Driver zone radius around the anchor, normalised (default 0.40)")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
+    parser.add_argument("--no-zone", action="store_true",
+                        help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
     parser.add_argument("--no-window", action="store_true",
                         help="Headless: run detection and print statistics only")
     parser.add_argument("--max-frames", type=int, default=0,
@@ -716,7 +722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         return run_demo(create_source(camera), detector, mode=args.mode,
                         mirror=not args.no_mirror, show_window=not args.no_window,
-                        max_frames=args.max_frames)
+                        max_frames=args.max_frames, show_zone=not args.no_zone)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

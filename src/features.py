@@ -451,7 +451,8 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
     _trace(frame, ear_trace, width - 210, height - 130, 200, 50, EAR_BAR_MAX, COLOR_EYE, "EAR mean")
     _trace(frame, mar_trace, width - 210, height - 72, 200, 50, MAR_BAR_MAX, COLOR_MOUTH, "MAR")
 
-    put("q=quit  m=mesh mode  g=gray input  p=pose method  s=snapshot", 10, height - 12, (200, 200, 200), 0.5)
+    put("q=quit  m=mesh mode  g=gray input  p=pose method  z=zone  s=snapshot", 10, height - 12,
+        (200, 200, 200), 0.5)
 
 
 # --- live demo ---------------------------------------------------------------
@@ -472,7 +473,7 @@ def _describe(name: str, values: List[float]) -> str:
 def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "contours",
              mirror: bool = True, show_window: bool = True, max_frames: int = 0,
              record: Optional[Path] = None, pose_config: Optional[PoseConfig] = None,
-             validity_config: Optional[ValidityConfig] = None) -> int:
+             validity_config: Optional[ValidityConfig] = None, show_zone: bool = True) -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     tracker = InvalidFrameTracker(validity_config.window_seconds)
@@ -504,7 +505,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                   else "<= {} deg".format(validity_config.max_abs_pitch_deg),
                   validity_config.min_face_width_px, validity_config.min_eye_width_px,
                   validity_config.edge_margin_px, validity_config.window_seconds))
-        print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | s snapshot")
+        print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | "
+              "z driver zone on/off | s snapshot")
         if show_window:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -539,7 +541,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
 
             if show_window:
                 display = frame.copy()
-                draw_driver_zone(display, detector.config)
+                if show_zone:
+                    draw_driver_zone(display, detector.config)
                 if face is not None:
                     draw_landmarks(display, face, DRAW_MODES[mode_index])
                     draw_feature_geometry(display, face)
@@ -564,6 +567,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     pose_config.method = POSE_METHODS[(POSE_METHODS.index(pose_config.method) + 1)
                                                       % len(POSE_METHODS)]
                     print("[features] pose method -> {}".format(pose_config.method))
+                if key == ord("z"):
+                    show_zone = not show_zone
                 if key == ord("s"):
                     print("[features] Saved {}".format(save_snapshot(display)))
                 if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
@@ -763,6 +768,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window", type=float, default=60.0,
                         help="Rolling window in seconds for the invalid-frame rate (default 60)")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
+    parser.add_argument("--no-zone", action="store_true",
+                        help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
     parser.add_argument("--no-window", action="store_true", help="Headless: statistics only")
     parser.add_argument("--max-frames", type=int, default=0, help="Stop after N frames (0 = until quit)")
     parser.add_argument("--record", type=Path, default=None,
@@ -790,7 +797,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         return run_demo(create_source(camera), detector, mode=args.mode, mirror=not args.no_mirror,
                         show_window=not args.no_window, max_frames=args.max_frames, record=args.record,
-                        pose_config=pose_config, validity_config=validity_config)
+                        pose_config=pose_config, validity_config=validity_config,
+                        show_zone=not args.no_zone)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

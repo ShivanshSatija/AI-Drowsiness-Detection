@@ -142,6 +142,10 @@ over a rolling 60 s window and for the session. On an INVALID frame the EAR and
 MAR values are still shown but greyed "(not interpreted)" and are excluded from
 the traces — they must never be read as eye or mouth state.
 
+Keys: **`q`** quit · **`m`** mesh mode · **`g`** grayscale input · **`p`** pose
+method · **`z`** hide / show the driver-zone ellipse (start hidden with
+`--no-zone`) · **`s`** snapshot.
+
 **Head pose** ([`src/headpose.py`](src/headpose.py)). Convention: **yaw > 0 =
 turned to the subject's left, pitch > 0 = looking up, roll > 0 = tilt toward the
 left shoulder.** Two independent estimators are implemented so one can check the
@@ -285,7 +289,8 @@ python -m src.landmarks --self-test    :: model integrity + code checks, no came
 ```
 
 Keys: **`q`**/**`Esc`** quit · **`m`** cycle draw mode (contours → mesh → points → off) ·
-**`g`** toggle grayscale input · **`s`** snapshot. The HUD shows FPS, MediaPipe
+**`g`** toggle grayscale input · **`z`** hide / show the driver-zone ellipse ·
+**`s`** snapshot. The HUD shows FPS, MediaPipe
 inference time, FACE FOUND / NO FACE DETECTED, and the running detection rate.
 
 **What Stage 2 produces for later stages.** `FaceLandmarkDetector.process(frame)`

@@ -121,7 +121,30 @@ python -m src.capture --self-test     :: headless check, no camera needed
 ```
 
 In the preview window: **`q`** or **`Esc`** quits, **`s`** saves a snapshot to
-`data/snapshots/`.
+`data/snapshots/`. Closing the window with the **X** button also exits cleanly.
+(`Alt+F4` does *not* close it — OpenCV's HighGUI window class ignores it.)
+
+### Measured baseline — unmodified laptop webcam
+
+Recorded 2026-09-13 so that Stage 13 has a real before/after reference for the
+NoIR conversion. Windows 11, Python 3.11.9, OpenCV 4.11.0.86, NumPy 1.26.4,
+indoor artificial lighting. All figures are measured, not estimated.
+
+| Property | Measured value |
+|---|---|
+| Cameras detected | 1 (index 0, DSHOW backend) |
+| Resolution | 640 × 480, driver-reported 30 FPS |
+| Camera open time | 1.78 s first open, 1.71–1.75 s on reopen |
+| Throughput, headless capture | 22.5 FPS over 120 frames |
+| Throughput, with preview window | 19.0–25.4 FPS over 400-frame runs |
+| Frame read latency | median 48.0 ms, p95 63.5 ms, max 64.9 ms |
+| Dropped frames | 0 of 120 |
+| Mean frame brightness | 140.4 / 255 |
+
+Short runs average lower (~16 FPS) because the first seconds include
+auto-exposure settling; steady-state is the range above. The gap between
+headless and preview throughput is the cost of `cv2.imshow` rendering — worth
+remembering when FPS budget matters in Stage 8 onward.
 
 ## 7. Build stages
 

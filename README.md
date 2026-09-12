@@ -7,7 +7,7 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 2 of 15 complete** (camera capture + real-time facial landmarks).
+> **Status: Stage 3 of 15 complete** (camera → landmarks → live EAR / MAR).
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -123,6 +123,55 @@ present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
 
+### Stage 3 — Eye Aspect Ratio and Mouth Aspect Ratio
+
+```bat
+python -m src.features                               :: live camera: landmarks + EAR / MAR + FPS
+python -m src.features --record data\features.csv    :: also log every frame's values to CSV
+python -m src.features --no-window --max-frames 300  :: headless: statistics only
+python -m src.features --self-test                   :: formula checks on known geometry, no camera
+```
+
+Same keys as Stage 2. The HUD shows EAR for the left eye, right eye and their
+mean, MAR, FPS and inference time, plus the exact landmarks and distances the
+formulas use (yellow for eyes, magenta for mouth) and two rolling traces.
+`--record` writes one row per frame — this is how the EAR/MAR distributions for
+open eyes, closed eyes and yawns will be *measured* before Stage 9 sets any
+threshold.
+
+**Landmarks and formulas** ([`src/features.py`](src/features.py)). All distances
+are in pixels on the un-mirrored frame; L/R are the subject's own left/right.
+
+| Feature | Landmarks (MediaPipe indices) | Formula |
+|---|---|---|
+| EAR, right eye | p1…p6 = 33, 160, 158, 133, 153, 144 | EAR = (‖p2−p6‖ + ‖p3−p5‖) / (2·‖p1−p4‖) |
+| EAR, left eye | p1…p6 = 362, 385, 387, 263, 373, 380 | same |
+| MAR | corners 61, 291 · upper inner lip 82, 13, 312 · lower inner lip 87, 14, 317 | MAR = mean(‖82−87‖, ‖13−14‖, ‖312−317‖) / ‖61−291‖ |
+
+EAR (Soukupová & Čech, 2016) averages two vertical eyelid gaps and divides by
+the eye width, so it is invariant to distance and in-plane roll and falls
+towards 0 as the eye closes. MAR is ≈ 0 with the lips touching and rises as
+the mouth opens; three lip pairs are averaged to damp landmark jitter. Both
+return NaN rather than dividing by zero if a width degenerates.
+
+**Measured so far** — raw values, no thresholds applied:
+
+| Condition | EAR (mean of both eyes) | MAR | Notes |
+|---|---|---|---|
+| Static frontal test portrait — eyes open, smiling, mouth closed; 883 frames over two runs | median **0.182**, std 0.003, range 0.173–0.193 | median **0.005**, max 0.025 | Noise floor: frame-to-frame ǀΔEARǀ median 0.0007; the two eyes agree to ǀL−Rǀ = 0.005 |
+| Live webcam, developer's face, 116 frames with a face (face in view 46 % of the run) | median **0.272**, range 0.176–0.416 | median **0.016**, max 0.044 (mouth closed) | One 2-frame dip to 0.176, consistent with a blink |
+
+Closed-eye and open-mouth values are **not yet recorded** — they come from the
+Stage 3 live test.
+
+**EAR depends on head yaw.** On the frontal portrait the two eyes agree to
+0.005, but in the live run the left eye read a persistent 0.08–0.15 *lower*
+than the right in every 25-frame bin — the sitter was looking at the screen
+rather than into the camera, which foreshortens one eye. The formula itself is
+symmetric, so a per-eye gap of that size is a head-pose signal, not noise.
+Stage 4 measures yaw directly and marks such frames INVALID; Stage 9 must not
+treat them as eye closure.
+
 ### Stage 2 — live facial landmarks
 
 ```bat
@@ -219,7 +268,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 |---|---|---|
 | 1 | Project foundation + webcam capture | ✅ done |
 | 2 | MediaPipe Face Landmarker — 478 real-time landmarks | ✅ done |
-| 3 | EAR + MAR | ⬜ |
+| 3 | EAR + MAR from landmarks, live display + CSV recording | ✅ done |
 | 4 | Head pose + invalid-frame handling | ⬜ |
 | 5 | Eye-region cropping and preprocessing | ⬜ |
 | 6 | MRL eye dataset preparation (subject-independent split) | ⬜ |

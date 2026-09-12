@@ -1,0 +1,9 @@
+snapshot_time,condition,ear_left,ear_right,ear_mean,mar,yaw_deg,pitch_deg,roll_deg,matrix_distance_cm,eye_width_left_px,eye_width_right_px,frame_valid,invalid_rate_window,notes
+2026-09-13 02:26:59,frontal - eyes open,0.352,0.331,0.342,0.005,7,-8,-3,33,38,41,1,0.22,crop tiles sharp and level
+2026-09-13 02:27:01,frontal - eyes closed,0.193,0.157,0.175,0.005,9,-4,-5,33,33,37,1,0.18,closed lids clearly visible in tiles
+2026-09-13 02:27:03,turned to subject's right with visible head tilt,0.370,0.471,0.420,0.011,-24,-2,-2,32,47,33,1,0.16,far (right) eye EAR inflated; face visibly tilted ~20 deg yet matrix roll -2 (see notes)
+2026-09-13 02:27:06,turned to subject's left - yaw at the 30 deg gate,0.555,0.399,0.477,0.012,30,0,-6,32,24,40,1,0.23,far (left) eye 24 px and EAR 0.555; frame still VALID at exactly 30
+2026-09-13 02:27:33,farther from camera (~46 cm) - eyes partly narrowed,0.233,0.246,0.239,0.003,2,0,-4,46,24,25,1,0.09,24 px eyes -> upsampled 2.7x; tiles soft but usable
+2026-09-13 02:27:37,frontal - eyes closed,0.074,0.064,0.069,0.001,2,-4,-4,36,34,36,1,0.09,
+2026-09-13 02:27:39,frontal - eyes closed (looking slightly down),0.101,0.078,0.090,0.007,3,6,-3,37,33,36,1,0.08,
+2026-09-13 02:27:40,frontal - eyes closed,0.073,0.035,0.054,0.002,2,5,-3,37,33,35,1,0.08,

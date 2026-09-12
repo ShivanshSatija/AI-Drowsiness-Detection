@@ -152,6 +152,15 @@ The script is headless and cannot verify the interactive parts. Run
 `Alt+F4` does **not** close the window — OpenCV's HighGUI window class ignores
 it. That is expected, not a defect.
 
+## results/stage5_live_observations.csv
+
+HUD readings from the developer's eight Stage 5 test snapshots (2026-09-13):
+EAR, MAR, yaw/pitch/roll (matrix estimator), estimated distance, per-eye width
+in pixels, frame validity and the rolling invalid-frame rate, with the
+condition labelled by inspection. Used for the eye-size versus distance finding
+and the yaw-inflates-EAR observation in the README. Frame images and the saved
+eye crops are not committed.
+
 ## results/stage4_pose_validation.csv
 
 Head-pose validation on the developer's twelve Stage 3 snapshots, flipped back

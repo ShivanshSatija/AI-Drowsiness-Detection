@@ -175,11 +175,15 @@ Two decisions that bind later stages, both deliberate:
 |---|---|
 | Self-test, synthetic eye tilted 20° | crop centred within 2 px; tilt after alignment **0.0°** (19.9° without); contract holds bit for bit; saved PNG re-preprocesses identically |
 | True-aspect test portrait video, 300 frames | 600 crops, **100 % valid**; eye width 32–36 px → raw crop 51 px, *enlarged* to 64 × 64 |
-| Live test with the developer's face | **pending** — at laptop distance the eyes measured ~50–60 px wide in Stage 3, so raw crops of ~75–90 px will be *shrunk* to 64 × 64, close to MRL's native resolution |
+| Live test, developer's face, 8 snapshots ([`evaluation/results/stage5_live_observations.csv`](evaluation/results/stage5_live_observations.csv)) | Eye width **33–41 px** at the normal laptop distance (~33–37 cm by the matrix estimate) → raw crops 50–60 px, almost 1 : 1 with the 64 × 64 output; open-eye tiles sharp, centred and level under head tilt; closed-eye tiles unmistakably closed. At ~46 cm the eyes shrink to **24–25 px** and the tiles turn soft (2.7× upsampling). Every crop geometrically valid |
 
-The portrait's eyes are small enough that its crops are upsampled — soft but
-usable. Below the 15 px eye-width gate a crop is flagged invalid rather than
-fed onward.
+**Eye size drives crop quality, and it is set by camera distance and
+resolution.** At 640 × 480 the eyes were 38 px at ~35 cm and 24 px at ~46 cm;
+a dashboard mount at 60–80 cm would leave ~15–20 px — at the validity floor
+and far too soft for a classifier. Input to Stage 13/14: run the USB camera at
+**1280 × 720** (doubling eye pixels) and/or mount it closer, and re-measure
+with the same HUD. Below the 15 px eye-width gate a crop is flagged invalid
+rather than fed onward.
 
 ### Stage 4 — head pose and frame validity
 
@@ -265,7 +269,18 @@ sessions.
 |---|---|
 | Live webcam, nobody in view, 250 frames | 250 / 250 INVALID, reason `no_face`; 3.5 ms inference — the no-face path verified on real hardware |
 | Synthetic two-face video (test portrait scaled to a ~75 px face) | 100 % INVALID: `face_too_small` (75 px < 80) and `eye_too_small` (14 px < 15) — the gate correctly refuses a face at roughly 2 m equivalent |
-| Live test with a real face — yaw distribution while driving-like head movement, resulting invalid rate | **pending** (Stage 4 live test) |
+| Live test, developer's face, 8 snapshots (same CSV as Stage 5) | Frontal yaw **+2…+9°**, pitch **−8…+6°** (camera slightly above the eye line), roll −2…−6°; turns read **−24°** and **+30°** and stayed VALID (the gate fires only *beyond* 30°); invalid-frame rate 8–23 % over the session, the high values from start-up and edge moments |
+
+Two things the live frames added. **EAR is already badly distorted well
+inside the 30° gate:** at yaw −24° the far eye read 0.471 and at +30° it read
+0.555, against 0.34 frontal — a 40–60 % inflation while the frame still
+counts as VALID. Stage 9 must either tighten the yaw gate (≈ 20–25°) or
+compensate EAR for yaw; the measurement is recorded so the choice can be made
+from data. **One roll reading is suspect:** in the −24° frame the face is
+visibly tilted by roughly 20° yet the matrix reported roll −2°. Roll gates
+nothing and the eye crops are aligned from the image eye-line angle (their
+tiles were level), so nothing downstream is affected — but re-check `matrix`
+roll under strong yaw before ever using it.
 
 ### Stage 3 — Eye Aspect Ratio and Mouth Aspect Ratio
 

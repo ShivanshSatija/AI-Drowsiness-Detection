@@ -76,6 +76,8 @@ import numpy as np
 
 from src.capture import (CameraConfig, CameraError, FPSCounter, FrameSource,
                          create_source, save_snapshot)
+from src.eye_cnn import (EyePreprocessConfig, draw_eye_boxes, draw_eye_panel,
+                         extract_eye_crops, save_eye_crops)
 from src.headpose import POSE_METHODS, HeadPose, PoseConfig, draw_pose, estimate_pose
 from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
                            LandmarkConfig, LandmarkModelError, draw_driver_zone,
@@ -475,13 +477,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              mirror: bool = True, show_window: bool = True, max_frames: int = 0,
              record: Optional[Path] = None, pose_config: Optional[PoseConfig] = None,
              validity_config: Optional[ValidityConfig] = None, show_zone: bool = True,
-             eye_config=None, show_crops: bool = True, dump_crops: Optional[Path] = None,
-             dump_every: int = 30) -> int:
-    # Imported here, not at module level: eye_cnn imports the eye index sets
-    # from this module, so a top-level import would be circular.
-    from src.eye_cnn import (EyePreprocessConfig, draw_eye_boxes, draw_eye_panel,
-                             extract_eye_crops, save_eye_crops)
-
+             eye_config: Optional[EyePreprocessConfig] = None, show_crops: bool = True,
+             dump_crops: Optional[Path] = None, dump_every: int = 30) -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
@@ -850,7 +847,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_eye_width_px=args.min_eye_px,
         window_seconds=args.window,
     )
-    from src.eye_cnn import EyePreprocessConfig  # lazy: see run_demo
     eye_config = EyePreprocessConfig(size=args.eye_size, crop_scale=args.crop_scale,
                                      align_roll=not args.no_align, min_eye_width_px=args.min_eye_px)
     try:

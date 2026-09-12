@@ -7,7 +7,12 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 5 of 15 complete** (camera → landmarks → EAR / MAR → head pose → frame validity → eye crops ready for the CNN).
+> **Status: Stage 5 of 15 complete; Stage 6 in progress; Stage 7 code ready.**
+> Camera → landmarks → EAR / MAR → head pose → frame validity → eye crops all
+> work live. The CNN, its augmentation, training script and Colab notebook are
+> built and pipeline-tested on synthetic data — but **no eye-state results exist
+> yet**: they will come from training on the subject-independent MRL split once
+> the dataset has been obtained and inspected (Stage 6).
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -76,7 +81,11 @@ AI-Drowsiness-Detection/
 │   ├── alert.py            escalating laptop alerts            [Stage 10]
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
 │   └── app.py              Streamlit dashboard                 [Stage 12]
-├── training/               MRL dataset prep + CNN training     [Stages 6-7]
+├── training/
+│   ├── inspect_mrl.py      report the dataset's real structure  [Stage 6]
+│   ├── prepare_mrl.py      subject-independent split -> .npz   [Stage 6, pending]
+│   ├── train_eye_cnn.py    training + evaluation logic          [Stage 7]
+│   └── train_eye_cnn.ipynb thin Colab driver around the script [Stage 7]
 ├── models/
 │   ├── face_landmarker.task  MediaPipe face model (official)   [Stage 2]
 │   └── eye_cnn.pt            trained eye-state CNN             [Stage 7]
@@ -123,6 +132,41 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 7 — eye-state CNN (code ready; training waits for the Stage 6 split)
+
+```bat
+python -m src.eye_cnn --self-test                       :: preprocessing, augmentation, model, checkpoint round trip
+python training\train_eye_cnn.py --data <npz dir> --out runs\run01 --export models\eye_cnn.pt --epochs 30
+python -m src.eye_cnn --predict path\to\eye.png         :: classify one image with models/eye_cnn.pt
+```
+
+Colab: open [`training/train_eye_cnn.ipynb`](training/train_eye_cnn.ipynb) — a
+thin driver that mounts Drive, clones this repo and runs the same script on a
+GPU, writing checkpoints, curves and metrics to Drive after every epoch.
+
+| Piece | Where | What |
+|---|---|---|
+| Model | `src/eye_cnn.py` `build_model` | four double-conv blocks (w, 2w, 4w, 4w) + BN/ReLU, global average pooling, dropout, 2 logits. Width 32 → **582,562 parameters** |
+| Classes | `CLASSES = ("CLOSED", "OPEN")` | index 0 = closed, 1 = open — the same coding as MRL's eye-state field |
+| Augmentation | `augment_eye`, `AugmentConfig` | applied to the **uint8 image before standardisation**: horizontal flip (dataset does not label eye side), ±10° rotation, 0.85–1.15 scale, ±4 px shift, contrast / brightness, gamma 0.7–2.2, **low-light branch** (×0.25–0.6 intensity, then sensor noise σ ≤ 14 — before standardisation so the signal-to-noise ratio is realistically low), blur, specular spot (glasses reflection), small dark cutout (frame edge) |
+| Checkpoint | `save_model` / `load_model` | self-describing file: weights + architecture + the exact `EyePreprocessConfig` + class names + metadata; Stage 8 refuses a mismatched one |
+| Inference API | `EyeStateClassifier` | `predict(tensors)`, `predict_crop(EyeCrop)`, `predict_image(file)` — all through `preprocess_eye_image` |
+| Training | `training/train_eye_cnn.py` | re-asserts subject disjointness, class-weighted cross-entropy, AdamW + one-cycle LR, early stopping on validation accuracy, `last.pt`/`best.pt` every epoch, `history.json`, `curves.png`; final evaluation on the **test split of unseen subjects**: accuracy, precision, recall, F1 (CLOSED as the safety-relevant positive class, plus OPEN and macro), confusion matrix, breakdown by glasses; `metrics.json` / `metrics.md` / `confusion_matrix.png`; `--export` writes the final model |
+
+**Measured on this laptop (CPU, 12 threads):** one forward pass on both eyes
+takes **3.8 ms** at width 32 (2.5 ms at width 16) — well inside the ~38 ms per
+frame left after landmarks, so the default width stays 32.
+
+**Pipeline smoke test — not a result.** To prove the code path, the script
+was run for 3 epochs on a *synthetic* stand-in for the splits (3,000 / 600 /
+600 images of a bright ring vs a dark arc, disjoint fake subjects). It reached
+100 % because the task is trivially separable; the point is that data
+loading, augmentation, checkpointing, curves, metrics, export and reload all
+worked, and `EyeStateClassifier` reproduced the training labels on the
+exported file. **Real eye-state figures will appear here only after the Colab
+run on the MRL split.** The roadmap's > 95 % target will not be engineered
+towards; whatever the unseen-subject test set gives is what gets reported.
 
 ### Stage 5 — eye crops, preprocessed exactly as the CNN will see them
 
@@ -469,8 +513,8 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 3 | EAR + MAR from landmarks, live display + CSV recording | ✅ done |
 | 4 | Head pose (yaw / pitch / roll) + INVALID-frame gate + invalid-frame rate | ✅ done |
 | 5 | Eye-region cropping + preprocessing shared with training | ✅ done |
-| 6 | MRL eye dataset preparation (subject-independent split) | ⬜ |
-| 7 | Eye-state CNN training and evaluation | ⬜ |
+| 6 | MRL eye dataset preparation (subject-independent split) | 🔶 inspection tool + acquisition guide done; dataset not yet obtained, `prepare_mrl.py` waits for its real structure |
+| 7 | Eye-state CNN training and evaluation | 🔶 model, augmentation, training script and Colab notebook built and pipeline-tested on synthetic data; **no results until Stage 6 delivers the split** |
 | 8 | CNN integrated into the live pipeline | ⬜ |
 | 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ⬜ |
 | 10 | Escalating laptop alert system | ⬜ |

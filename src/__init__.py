@@ -7,7 +7,7 @@ Modules are added stage by stage:
     features.py   Stage 3  - EAR / MAR, Stage 4 - frame validity  [done]
     headpose.py   Stage 4  - head pose: yaw / pitch / roll        [done]
     eye_cnn.py    Stage 5  - eye crop preprocessing (shared with training) [done]
-                  Stage 7  - eye-state CNN loading + inference
+                  Stage 7  - CNN, augmentation, checkpoint I/O, classifier [code done, untrained]
     temporal.py   Stage 9  - PERCLOS / blink / yawn / nod, state machine
     alert.py      Stage 10 - escalating laptop alerts
     hardware.py   Stage 11 - ESP32 serial link

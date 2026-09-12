@@ -1,10 +1,8 @@
-"""Eye-region extraction and preprocessing for the eye-state CNN (Stage 5).
+"""Eye-region extraction, preprocessing and the eye-state CNN (Stages 5, 7, 8).
 
-This module owns everything the CNN will ever see. Stage 5 provides the
-preprocessing; Stages 7-8 add the network, its training utilities and live
-inference to this same file, so training and inference share one import.
+This module owns everything the CNN will ever see - and the CNN itself.
 
-Pipeline for one eye::
+Stage 5 - preprocessing (no PyTorch needed)::
 
     frame (BGR) + landmarks
         -> square crop centred on the eye, side = crop_scale x eye-corner distance,
@@ -21,19 +19,27 @@ guarantees there is no train/inference mismatch: MRL images are already
 grayscale eye crops, so on them the same function simply skips the colour
 conversion.
 
+Stage 7 - model (PyTorch, imported lazily so Stage 5 code runs without it):
+
+* ``augment_eye``      training-time augmentation on the uint8 image, applied
+                       BEFORE standardisation so low-light noise keeps a realistic
+                       signal-to-noise ratio; includes flips (the dataset does not
+                       label eye side), geometry jitter, gamma darkening, noise,
+                       blur and specular spots (glasses reflections)
+* ``EyeStateCNN``      small CNN, 1 x size x size in, 2 logits out
+* ``save_model`` / ``load_model``  checkpoint file that carries its own
+                       preprocessing config and class names, so Stage 8 can
+                       refuse a mismatched model instead of silently mis-predicting
+* ``EyeStateClassifier``  what the live pipeline will call in Stage 8
+
+Class convention: index 0 = CLOSED, 1 = OPEN - the same coding the MRL Eye
+Dataset uses for its eye-state field.
+
 Design choices that bind later stages
 -------------------------------------
-* No left/right flipping. The MRL Eye Dataset does not label which eye an
-  image shows, so the classifier has to be side-agnostic; training
-  augmentation adds horizontal flips instead.
-* ``crop_scale`` (1.5) and ``size`` (64) are INITIAL values. MRL images are
-  tight, roughly square eye crops; Stage 6 compares real MRL samples with live
-  crops saved by this module (``e`` key / ``--dump-crops``) and adjusts the
-  scale so both look alike before any training happens.
-* Per-image standardisation (rather than dataset mean/std) removes global
-  brightness and contrast differences between MRL's infrared sensors and our
-  webcam / NoIR camera. Optional CLAHE (``equalize``) exists for Stage 7's
-  ablation and is off by default.
+* No left/right flipping at inference; horizontal flip is an augmentation.
+* ``crop_scale`` (1.5) and ``size`` (64) are INITIAL values, checked against
+  real MRL samples in Stage 6 before any training happens.
 * Validity here is geometric only (eye too narrow, crop partly outside the
   frame). Stage 4's frame gate is separate; Stage 8 requires both.
 
@@ -41,6 +47,7 @@ Run directly::
 
     python -m src.eye_cnn --self-test           # no camera needed
     python -m src.eye_cnn --image eye.png       # preprocess one file, print shapes/stats
+    python -m src.eye_cnn --predict eye.png     # classify one file with models/eye_cnn.pt
 """
 
 from __future__ import annotations
@@ -49,21 +56,25 @@ import argparse
 import math
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 from src.capture import PROJECT_ROOT
-from src.features import LEFT_EYE, RIGHT_EYE
 
 CROP_DIR = PROJECT_ROOT / "data" / "eye_crops"
+MODEL_PATH = PROJECT_ROOT / "models" / "eye_cnn.pt"
+CLASSES: Tuple[str, str] = ("CLOSED", "OPEN")   # index 0 = closed, 1 = open (MRL coding)
+CHECKPOINT_FORMAT = "eye_cnn_v1"
 
 
-# --- configuration -----------------------------------------------------------
+# =============================================================================
+# Stage 5 - preprocessing
+# =============================================================================
 
 @dataclass
 class EyePreprocessConfig:
@@ -76,8 +87,6 @@ class EyePreprocessConfig:
     equalize: bool = False          # CLAHE before standardisation (Stage 7 ablation option)
     min_eye_width_px: float = 15.0  # narrower eyes give unusable crops
 
-
-# --- pure image preprocessing (identical for training and inference) --------
 
 def to_grayscale(image: np.ndarray) -> np.ndarray:
     """uint8 single-channel image from BGR, BGRA or already-gray input."""
@@ -193,6 +202,10 @@ def extract_eye_crops(frame_bgr: np.ndarray, face,
     """(left, right) crops for the subject's eyes, or (None, None) without a face."""
     if face is None:
         return None, None
+    # Imported here so that importing this module (e.g. in Colab for training)
+    # does not pull in MediaPipe through src.features.
+    from src.features import LEFT_EYE, RIGHT_EYE
+
     config = config or EyePreprocessConfig()
     gray_frame = to_grayscale(frame_bgr)
     left = crop_eye(gray_frame, face, LEFT_EYE, "left", config)
@@ -260,11 +273,223 @@ def draw_eye_panel(display: np.ndarray, crops: Tuple[Optional[EyeCrop], Optional
                         COLOR_CROP_BAD, 1, cv2.LINE_AA)
 
 
-# --- self-test ---------------------------------------------------------------
+# =============================================================================
+# Stage 7 - augmentation (numpy / OpenCV only, so it runs anywhere)
+# =============================================================================
+
+@dataclass
+class AugmentConfig:
+    """Training-time augmentation of a uint8 eye image. Applied BEFORE
+    standardisation. Initial values; Stage 7 may tune them."""
+
+    hflip_p: float = 0.5                          # dataset does not label eye side -> side-agnostic model
+    max_rotation_deg: float = 10.0                # residual roll after alignment
+    scale_range: Tuple[float, float] = (0.85, 1.15)   # absorbs crop_scale mismatch vs MRL framing
+    max_shift_px: int = 4
+    contrast_range: Tuple[float, float] = (0.7, 1.3)
+    brightness_range: Tuple[float, float] = (-40.0, 40.0)
+    gamma_range: Tuple[float, float] = (0.7, 2.2)     # > 1 darkens
+    dark_p: float = 0.3                           # low-light rehearsal: extra strong darkening ...
+    dark_scale_range: Tuple[float, float] = (0.25, 0.6)   # ... multiply intensities by this ...
+    noise_sigma_range: Tuple[float, float] = (0.0, 14.0)  # ... then add sensor noise (before standardisation)
+    blur_p: float = 0.3
+    blur_sigma_range: Tuple[float, float] = (0.3, 1.2)
+    specular_p: float = 0.15                      # bright spot / streak, like a glasses reflection
+    cutout_p: float = 0.1                         # small dark occluder, like a frame edge
+    cutout_size_px: int = 12
+
+
+def augment_eye(gray: np.ndarray, rng: np.random.Generator,
+                config: Optional[AugmentConfig] = None) -> np.ndarray:
+    """Return an augmented uint8 copy of a (H, W) uint8 eye image.
+
+    Order: flip -> rotation/scale/shift (one warp) -> contrast/brightness ->
+    gamma -> optional strong darkening -> optional specular spot / cutout ->
+    optional blur -> additive noise. Standardisation happens afterwards in
+    ``normalize_eye``; applying darkening and noise here, before it, is what
+    gives the network realistically low signal-to-noise inputs.
+    """
+    config = config or AugmentConfig()
+    h, w = gray.shape[:2]
+    img = gray[:, ::-1] if rng.random() < config.hflip_p else gray
+    img = np.ascontiguousarray(img)
+
+    angle = rng.uniform(-config.max_rotation_deg, config.max_rotation_deg)
+    scale = rng.uniform(*config.scale_range)
+    matrix = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, scale)
+    matrix[0, 2] += rng.uniform(-config.max_shift_px, config.max_shift_px)
+    matrix[1, 2] += rng.uniform(-config.max_shift_px, config.max_shift_px)
+    img = cv2.warpAffine(img, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+    x = img.astype(np.float32)
+    x = (x - 128.0) * rng.uniform(*config.contrast_range) + 128.0 + rng.uniform(*config.brightness_range)
+    x = np.clip(x, 0.0, 255.0)
+    x = 255.0 * np.power(x / 255.0, rng.uniform(*config.gamma_range))
+    if rng.random() < config.dark_p:
+        x = x * rng.uniform(*config.dark_scale_range)
+
+    if rng.random() < config.specular_p:
+        overlay = np.zeros((h, w), dtype=np.float32)
+        cx, cy = int(rng.uniform(0.15, 0.85) * w), int(rng.uniform(0.15, 0.85) * h)
+        axes = (int(rng.uniform(1, 5)), int(rng.uniform(1, 9)))
+        cv2.ellipse(overlay, (cx, cy), axes, float(rng.uniform(0, 180)), 0, 360, 1.0, -1)
+        overlay = cv2.GaussianBlur(overlay, (0, 0), 1.0)
+        x = x + overlay * rng.uniform(120.0, 255.0)
+    if rng.random() < config.cutout_p:
+        s = config.cutout_size_px
+        cx, cy = int(rng.uniform(0, w - s)), int(rng.uniform(0, h - s))
+        x[cy:cy + s, cx:cx + s] = rng.uniform(0.0, 60.0)
+
+    if rng.random() < config.blur_p:
+        x = cv2.GaussianBlur(x, (0, 0), float(rng.uniform(*config.blur_sigma_range)))
+    sigma = rng.uniform(*config.noise_sigma_range)
+    if sigma > 0:
+        x = x + rng.normal(0.0, sigma, size=x.shape).astype(np.float32)
+    return np.clip(x, 0.0, 255.0).astype(np.uint8)
+
+
+# =============================================================================
+# Stage 7 - model, checkpoint format, classifier (PyTorch imported lazily)
+# =============================================================================
+
+def _torch():
+    try:
+        import torch  # noqa: WPS433
+        import torch.nn as nn  # noqa: WPS433
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError("PyTorch is required for the eye-state CNN: pip install torch "
+                          "(CPU wheels: --index-url https://download.pytorch.org/whl/cpu)") from exc
+    return torch, nn
+
+
+def build_model(width: int = 32, dropout: float = 0.3, num_classes: int = 2):
+    """EyeStateCNN: four double-conv blocks (w, 2w, 4w, 4w channels) with
+    BatchNorm and ReLU, max-pooling between the first three, global average
+    pooling, dropout, linear head. Parameter count scales with width^2:
+    about 146 k at width 16, 328 k at width 24, 583 k at width 32. The
+    self-test prints the measured CPU latency for a two-eye batch so the
+    width can be chosen against the live frame budget (Stage 4: ~38 ms free)."""
+    torch, nn = _torch()
+
+    def block(cin, cout):
+        return nn.Sequential(
+            nn.Conv2d(cin, cout, 3, padding=1, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+            nn.Conv2d(cout, cout, 3, padding=1, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        )
+
+    class EyeStateCNN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.width, self.dropout_p, self.num_classes = width, dropout, num_classes
+            self.features = nn.Sequential(
+                block(1, width), nn.MaxPool2d(2),            # size    -> size/2
+                block(width, 2 * width), nn.MaxPool2d(2),    # size/2  -> size/4
+                block(2 * width, 4 * width), nn.MaxPool2d(2),  # size/4 -> size/8
+                block(4 * width, 4 * width),
+            )
+            self.pool = nn.AdaptiveAvgPool2d(1)
+            self.head = nn.Sequential(nn.Flatten(), nn.Dropout(dropout), nn.Linear(4 * width, num_classes))
+
+        def forward(self, x):
+            return self.head(self.pool(self.features(x)))
+
+    return EyeStateCNN()
+
+
+def count_parameters(model) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def save_model(model, path: Path, preprocess: EyePreprocessConfig,
+               metadata: Optional[Dict] = None) -> Path:
+    """Write a self-describing checkpoint: weights + architecture + the exact
+    preprocessing config the model was trained with + class names + metadata.
+    Only plain Python types go into metadata so it loads with weights_only=True."""
+    torch, _ = _torch()
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "format": CHECKPOINT_FORMAT,
+        "state_dict": model.state_dict(),
+        "arch": {"width": int(model.width), "dropout": float(model.dropout_p),
+                 "num_classes": int(model.num_classes)},
+        "classes": list(CLASSES),
+        "preprocess": {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(preprocess).items()},
+        "metadata": dict(metadata or {}),
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    torch.save(payload, str(path))
+    return path
+
+
+def load_model(path: Path = MODEL_PATH, device: str = "cpu"):
+    """Return (model in eval mode on device, payload dict). Refuses unknown formats."""
+    torch, _ = _torch()
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError("No trained eye-state model at {} - train it in Stage 7 first.".format(path))
+    try:
+        payload = torch.load(str(path), map_location=device, weights_only=True)
+    except Exception:  # older torch without weights_only, or a checkpoint with extra types
+        payload = torch.load(str(path), map_location=device)
+    if payload.get("format") != CHECKPOINT_FORMAT:
+        raise ValueError("Unexpected checkpoint format {!r} in {}".format(payload.get("format"), path))
+    arch = payload["arch"]
+    model = build_model(width=arch["width"], dropout=arch["dropout"], num_classes=arch["num_classes"])
+    model.load_state_dict(payload["state_dict"])
+    model.to(device).eval()
+    return model, payload
+
+
+class EyeStateClassifier:
+    """Loads models/eye_cnn.pt and classifies preprocessed eye tensors.
+
+    ``predict`` takes float32 arrays of shape (N, size, size) as produced by
+    ``preprocess_eye_image`` / ``EyeCrop.tensor`` and returns (labels, probs):
+    labels are indices into CLASSES, probs is (N, 2). Stage 8 wires this to the
+    live crops; nothing here touches the camera.
+    """
+
+    def __init__(self, path: Path = MODEL_PATH, device: str = "cpu") -> None:
+        self.torch, _ = _torch()
+        self.model, self.payload = load_model(path, device)
+        self.device = device
+        self.classes = tuple(self.payload["classes"])
+        pre = dict(self.payload["preprocess"])
+        pre = {k: (tuple(v) if isinstance(v, list) else v) for k, v in pre.items()}
+        self.config = EyePreprocessConfig(**pre)
+        self.size = self.config.size
+
+    def predict(self, tensors: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        x = np.asarray(tensors, dtype=np.float32)
+        if x.ndim == 2:
+            x = x[None]
+        if x.shape[1:] != (self.size, self.size):
+            raise ValueError("expected tensors of shape (N, {0}, {0}), got {1}".format(self.size, x.shape))
+        with self.torch.no_grad():
+            logits = self.model(self.torch.from_numpy(x[:, None]).to(self.device))
+            probs = self.torch.softmax(logits, dim=1).cpu().numpy()
+        return probs.argmax(axis=1), probs
+
+    def predict_image(self, image: np.ndarray) -> Tuple[str, float]:
+        """Classify any eye image file/array through the shared preprocessing."""
+        _, tensor = preprocess_eye_image(image, self.config)
+        labels, probs = self.predict(tensor[None])
+        return self.classes[int(labels[0])], float(probs[0, labels[0]])
+
+    def predict_crop(self, crop: EyeCrop) -> Tuple[str, float]:
+        labels, probs = self.predict(crop.tensor[None])
+        return self.classes[int(labels[0])], float(probs[0, labels[0]])
+
+
+# =============================================================================
+# self-test
+# =============================================================================
 
 def _synthetic_eye_frame(center: Tuple[float, float], half_width: float, angle_deg: float,
                          size=(640, 480)):
     """A dark frame with a bright ellipse 'eye' and matching six landmarks."""
+    from src.features import LEFT_EYE, RIGHT_EYE
     from src.landmarks import NUM_LANDMARKS, FaceLandmarks
 
     frame = np.full((size[1], size[0], 3), 40, dtype=np.uint8)
@@ -300,6 +525,8 @@ def _ellipse_orientation(gray: np.ndarray) -> Tuple[float, Tuple[float, float]]:
 
 
 def self_test() -> int:
+    from src.features import LEFT_EYE
+
     config = EyePreprocessConfig()
 
     # 1. Pure preprocessing on an MRL-like file: shapes, dtypes, normalisation.
@@ -369,14 +596,77 @@ def self_test() -> int:
     out_dir.rmdir()
     print("[self-test] drawing OK; saved crops reload and re-preprocess identically")
 
+    # 6. Augmentation: shape/dtype preserved, deterministic under a seed, actually changes the image,
+    #    and its low-light branch lowers the mean intensity.
+    rng = np.random.default_rng(7)
+    aug = augment_eye(left.gray, rng)
+    assert aug.shape == left.gray.shape and aug.dtype == np.uint8
+    assert not np.array_equal(aug, left.gray), "augmentation must change the image"
+    assert np.array_equal(augment_eye(left.gray, np.random.default_rng(7)), aug), "same seed -> same result"
+    dark_cfg = AugmentConfig(dark_p=1.0, dark_scale_range=(0.3, 0.3), gamma_range=(1.0, 1.0),
+                             contrast_range=(1.0, 1.0), brightness_range=(0.0, 0.0), noise_sigma_range=(0.0, 0.0),
+                             specular_p=0.0, cutout_p=0.0, blur_p=0.0, hflip_p=0.0, max_rotation_deg=0.0,
+                             scale_range=(1.0, 1.0), max_shift_px=0)
+    dark = augment_eye(left.gray, np.random.default_rng(0), dark_cfg)
+    assert abs(float(dark.mean()) - 0.3 * float(left.gray.mean())) < 2.0, (dark.mean(), left.gray.mean())
+    _, dark_tensor = preprocess_eye_image(dark, config)
+    assert abs(float(dark_tensor.std()) - 1.0) < 1e-3, "standardisation must restore unit variance"
+    print("[self-test] augmentation OK: uint8 preserved, seeded determinism, dark branch scales intensity by 0.3")
+
+    # 7. Model, checkpoint round trip and classifier (skipped if PyTorch is absent).
+    try:
+        torch, _ = _torch()
+    except ImportError as exc:
+        print("[self-test] PyTorch not installed - model checks skipped ({})".format(exc))
+        print("[self-test] PASS (preprocessing only)")
+        return 0
+    torch.manual_seed(0)
+    model = build_model(width=8)
+    logits = model(torch.zeros(3, 1, 64, 64))
+    assert logits.shape == (3, 2), logits.shape
+    full = build_model()
+    n_params = count_parameters(full)
+    assert count_parameters(build_model(width=16)) < n_params < 1_000_000, n_params
+    full.eval()
+    two_eyes = torch.randn(2, 1, 64, 64)
+    with torch.no_grad():
+        for _ in range(5):
+            full(two_eyes)
+        t0 = time.perf_counter()
+        for _ in range(20):
+            full(two_eyes)
+    latency_ms = (time.perf_counter() - t0) / 20 * 1000.0
+    print("[self-test] CPU latency, width {} two-eye batch: {:.1f} ms ({} threads)".format(
+        full.width, latency_ms, torch.get_num_threads()))
+    ckpt_dir = PROJECT_ROOT / "data" / "_selftest_ckpt"
+    ckpt = save_model(model, ckpt_dir / "eye_cnn_selftest.pt", config, {"note": "self-test", "epochs": 0})
+    reloaded_model, payload = load_model(ckpt)
+    assert payload["classes"] == list(CLASSES) and payload["preprocess"]["size"] == 64
+    x = torch.randn(2, 1, 64, 64)
+    model.eval()
+    assert torch.allclose(model(x), reloaded_model(x), atol=1e-6), "reloaded model must reproduce outputs"
+    clf = EyeStateClassifier(ckpt)
+    labels, probs = clf.predict(np.stack([left.tensor, right.tensor]))
+    assert labels.shape == (2,) and probs.shape == (2, 2) and np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
+    label, conf = clf.predict_crop(left)
+    assert label in CLASSES and 0.0 <= conf <= 1.0
+    label_i, conf_i = clf.predict_image(mrl_like)
+    assert label_i in CLASSES
+    ckpt.unlink()
+    ckpt_dir.rmdir()
+    print("[self-test] model OK: forward (3,2); full model {:,} params; checkpoint round trip exact; "
+          "classifier predicts crops and files".format(n_params))
+
     print("[self-test] PASS")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Stage 5: eye crop preprocessing (shared with training).")
+    parser = argparse.ArgumentParser(description="Eye crop preprocessing (Stage 5) and eye-state CNN (Stage 7).")
     parser.add_argument("--self-test", action="store_true", help="Run checks that need no camera")
     parser.add_argument("--image", type=Path, help="Preprocess one eye image file and report shapes/statistics")
+    parser.add_argument("--predict", type=Path, help="Classify one eye image file with the trained model")
+    parser.add_argument("--model", type=Path, default=MODEL_PATH, help="Checkpoint for --predict")
     parser.add_argument("--out", type=Path, help="With --image: write the resized gray result here")
     parser.add_argument("--size", type=int, default=64)
     parser.add_argument("--equalize", action="store_true", help="Apply CLAHE before standardisation")
@@ -404,6 +694,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(args.out), gray)
             print("wrote   : {}".format(args.out))
+        return 0
+    if args.predict:
+        image = cv2.imread(str(args.predict), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            print("ERROR: could not read {}".format(args.predict), file=sys.stderr)
+            return 1
+        clf = EyeStateClassifier(args.model)
+        t0 = time.perf_counter()
+        label, conf = clf.predict_image(image)
+        print("{}: {} ({:.1%}) in {:.1f} ms | model {} trained {}".format(
+            args.predict.name, label, conf, (time.perf_counter() - t0) * 1000.0,
+            args.model.name, clf.payload.get("saved_at", "?")))
         return 0
     build_parser().print_help()
     return 0

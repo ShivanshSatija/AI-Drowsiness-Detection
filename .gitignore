@@ -49,8 +49,10 @@ data/snapshots/*
 
 # --- Models ---------------------------------------------------------------
 # models/eye_cnn.pt IS committed (it is small and needed to run the system).
-# Training checkpoints are not.
+# Training runs (checkpoints, curves, per-run metrics) live under runs/ and
+# on Google Drive; the final metrics are copied into evaluation/results/.
 models/checkpoints/
+runs/
 *.ckpt
 *.pth.tar
 

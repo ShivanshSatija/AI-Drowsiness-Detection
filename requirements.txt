@@ -20,8 +20,10 @@ opencv-contrib-python==4.11.0.86
 mediapipe==0.10.35
 
 # --- Stage 7-8: eye-state CNN (training in Colab, inference locally) ------
-# torch>=2.2
-# torchvision>=0.17
+# Locally the CPU wheel is enough (inference + smoke tests); Colab ships its
+# own CUDA build. Install locally with:
+#   pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
 
 # --- Stage 10: laptop alerts ----------------------------------------------
 # pyttsx3>=2.90

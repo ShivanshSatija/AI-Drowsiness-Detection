@@ -78,7 +78,10 @@ AI-Drowsiness-Detection/
 ├── training/               MRL dataset prep + CNN training     [Stages 6-7]
 ├── models/                 trained eye_cnn.pt                  [Stage 7]
 ├── hardware/               ESP32 sketch, wiring, photos        [Stage 11]
-├── evaluation/             evaluation scripts + results        [Stage 15]
+├── evaluation/
+│   ├── camera_baseline.py  camera acceptance test + baseline   [Stage 1]
+│   ├── results/            committed baseline measurements
+│   └── evaluate.py         full system evaluation              [Stage 15]
 ├── data/                   local only, not committed
 └── docs/                   report, poster, demo material
 ```
@@ -132,19 +135,34 @@ indoor artificial lighting. All figures are measured, not estimated.
 
 | Property | Measured value |
 |---|---|
-| Cameras detected | 1 (index 0, DSHOW backend) |
-| Resolution | 640 × 480, driver-reported 30 FPS |
-| Camera open time | 1.78 s first open, 1.71–1.75 s on reopen |
-| Throughput, headless capture | 22.5 FPS over 120 frames |
-| Throughput, with preview window | 19.0–25.4 FPS over 400-frame runs |
-| Frame read latency | median 48.0 ms, p95 63.5 ms, max 64.9 ms |
-| Dropped frames | 0 of 120 |
-| Mean frame brightness | 140.4 / 255 |
+| Cameras detected | 1 — index 0, DSHOW backend |
+| Resolution | 640 × 480 as requested; driver-reported 30 FPS |
+| Camera open time | 1.60 s; 1.54–1.66 s on reopen, no handle leak over 3 cycles |
+| Throughput, headless capture | **30.0 FPS**, 0 of 120 frames dropped |
+| Throughput, with preview window | 19.0–25.4 FPS — the cost of `cv2.imshow` rendering |
+| Frame read latency | median 31.0 ms, p95 47.6 ms, max 50.0 ms |
+| Mean frame brightness | 129.7 / 255 |
+| Channel means (B / G / R) | 124.0 / 130.0 / 131.5 — IR-cut filter in place |
+| Focus, Laplacian variance | 86.8 |
+| Saturated pixels (hotspot measure) | 0.00 % |
+| Illumination uniformity (dimmest ÷ brightest 3×3 cell) | 0.406 |
 
-Short runs average lower (~16 FPS) because the first seconds include
-auto-exposure settling; steady-state is the range above. The gap between
-headless and preview throughput is the cost of `cv2.imshow` rendering — worth
-remembering when FPS budget matters in Stage 8 onward.
+Produced by [`evaluation/camera_baseline.py`](evaluation/camera_baseline.py); the
+raw results are committed in [`evaluation/results/`](evaluation/results/).
+Reproduce with:
+
+```bat
+python evaluation\camera_baseline.py --label unmodified-laptop-webcam
+```
+
+Two notes for anyone repeating this. **Let the camera settle** — a cold first
+run measured 22.5 FPS / 48 ms median latency, versus 30.0 FPS / 31 ms once
+auto-exposure had stabilised. And **repeatability is tight**: two consecutive
+runs differed by 0.01 FPS and 0.05 brightness levels, so a real change between
+hardware conditions will stand out clearly from measurement noise.
+
+See [evaluation/README.md](evaluation/README.md) for the Stage 13 before/after
+protocol and what each metric reveals about the NoIR/IR conversion.
 
 ## 7. Build stages
 

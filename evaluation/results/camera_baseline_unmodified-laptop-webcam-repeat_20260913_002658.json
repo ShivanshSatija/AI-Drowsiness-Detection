@@ -1,0 +1,146 @@
+{
+  "label": "unmodified-laptop-webcam-repeat",
+  "notes": "Repeat of the same condition, to show run-to-run variance.",
+  "timestamp": "2026-09-13T00:26:58",
+  "environment": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9",
+    "opencv": "4.11.0",
+    "numpy": "1.26.4"
+  },
+  "measurements": {
+    "cameras_detected": [
+      {
+        "index": 0,
+        "backend": "DSHOW",
+        "resolution": [
+          640,
+          480
+        ]
+      }
+    ],
+    "open_time_s": 1.661,
+    "backend": "DSHOW",
+    "resolution": [
+      640,
+      480
+    ],
+    "driver_reported_fps": 30.0,
+    "frames_requested": 120,
+    "frames_captured": 120,
+    "dropped_frames": 0,
+    "drop_rate": 0.0,
+    "elapsed_s": 4.003,
+    "measured_fps": 29.98,
+    "latency_ms": {
+      "median": 31.24,
+      "p95": 46.36,
+      "max": 49.89
+    },
+    "image_stats": {
+      "mean_brightness": 129.69,
+      "std_brightness": 52.07,
+      "min_brightness": 12,
+      "max_brightness": 246,
+      "channel_means": {
+        "blue": 123.84,
+        "green": 129.85,
+        "red": 131.59
+      },
+      "focus_laplacian_var": 85.28,
+      "saturated_fraction": 0.0,
+      "dark_fraction": 0.0,
+      "grid_brightness": [
+        [
+          115.7,
+          164.4,
+          191.5
+        ],
+        [
+          98.3,
+          138.4,
+          172.6
+        ],
+        [
+          77.8,
+          78.0,
+          129.9
+        ]
+      ],
+      "grid_uniformity_ratio": 0.406
+    },
+    "reopen_times_s": [
+      1.584,
+      1.592,
+      1.61
+    ]
+  },
+  "checks": [
+    {
+      "name": "at least one camera detected",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "camera opens",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "open time under 5s",
+      "status": "PASS",
+      "detail": "1.66s"
+    },
+    {
+      "name": "resolution matches request",
+      "status": "PASS",
+      "detail": "got 640x480, requested 640x480"
+    },
+    {
+      "name": "frame shape is 480x640x3",
+      "status": "PASS",
+      "detail": "(480, 640, 3)"
+    },
+    {
+      "name": "drop rate at or under 2%",
+      "status": "PASS",
+      "detail": "0.0%"
+    },
+    {
+      "name": "measured FPS at least 10.0",
+      "status": "PASS",
+      "detail": "30.0 FPS"
+    },
+    {
+      "name": "image is live, not a frozen still",
+      "status": "PASS",
+      "detail": "brightness std over time 0.035"
+    },
+    {
+      "name": "image is not black",
+      "status": "PASS",
+      "detail": "mean brightness 129.7"
+    },
+    {
+      "name": "released cleanly",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "reopen cycle 1",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "reopen cycle 2",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "reopen cycle 3",
+      "status": "PASS",
+      "detail": ""
+    }
+  ],
+  "verdict": "PASS"
+}

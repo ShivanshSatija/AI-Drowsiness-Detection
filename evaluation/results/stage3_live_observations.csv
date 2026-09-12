@@ -1,0 +1,13 @@
+snapshot_time,condition,ear_left,ear_right,ear_mean,mar,fps,inference_ms,notes
+2026-09-13 01:21:40,frontal - eyes open,0.400,0.357,0.379,0.005,20.2,11.1,blinks visible as sharp dips in the EAR trace
+2026-09-13 01:21:44,frontal - eyes half-closed / looking down,0.293,0.258,0.275,0.004,19.9,14.0,
+2026-09-13 01:21:49,frontal - mouth wide open,0.416,0.398,0.407,0.869,20.0,14.1,
+2026-09-13 01:21:56,frontal - eyes closed,0.191,0.131,0.161,0.003,20.0,13.4,
+2026-09-13 01:21:58,frontal - mouth wide open,0.466,0.429,0.447,1.001,19.8,12.9,
+2026-09-13 01:22:04,head turned to subject's left (strong),0.543,0.257,0.400,0.135,19.9,12.4,far (left) eye EAR inflated
+2026-09-13 01:22:09,head turned to subject's right (extreme),0.363,1.265,0.814,0.022,20.0,11.7,far (right) eye EAR meaningless
+2026-09-13 01:22:21,head turned to subject's left (strong),0.618,0.190,0.404,0.162,20.3,10.3,far (left) eye inflated; near eye low
+2026-09-13 01:22:25,head turned to subject's right (strong),0.113,0.405,0.259,0.021,20.2,8.4,near (left) eye reads 0.113 - false-closure risk
+2026-09-13 01:25:13,head turned to subject's left (moderate),0.500,0.348,0.424,0.018,20.2,11.5,
+2026-09-13 01:25:21,head turned slightly right / looking down,0.365,0.506,0.435,0.007,20.2,11.1,
+2026-09-13 01:25:23,head turned to subject's left (strong),0.595,0.373,0.484,0.045,19.9,13.5,

@@ -1,7 +1,16 @@
 # evaluation/
 
-Measurement tooling. Currently holds the Stage 1 camera baseline; the full
-system evaluation (Stage 15) will be added here later.
+Measurement tooling and committed measurements. Currently holds the Stage 1
+camera baseline and the Stage 3 EAR/MAR observations; the full system
+evaluation (Stage 15) will be added here later.
+
+## results/stage3_live_observations.csv
+
+EAR and MAR values read from the HUD of the developer's Stage 3 test
+snapshots (single frames, 2026-09-13). The `condition` column was labelled by
+inspecting each frame. Head-turn rows show the far eye's EAR inflating and the
+near eye's collapsing — the evidence behind the yaw gating in Stage 4. Frame
+images are not committed.
 
 ## camera_baseline.py
 

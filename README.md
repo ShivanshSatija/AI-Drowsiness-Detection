@@ -160,17 +160,28 @@ return NaN rather than dividing by zero if a width degenerates.
 |---|---|---|---|
 | Static frontal test portrait — eyes open, smiling, mouth closed; 883 frames over two runs | median **0.182**, std 0.003, range 0.173–0.193 | median **0.005**, max 0.025 | Noise floor: frame-to-frame ǀΔEARǀ median 0.0007; the two eyes agree to ǀL−Rǀ = 0.005 |
 | Live webcam, developer's face, 116 frames with a face (face in view 46 % of the run) | median **0.272**, range 0.176–0.416 | median **0.016**, max 0.044 (mouth closed) | One 2-frame dip to 0.176, consistent with a blink |
+| Live test, frontal, **eyes open** | L 0.400 · R 0.357 · mean **0.379** | 0.005 | Blinks visible as sharp dips in the trace |
+| Live test, frontal, eyes half-closed / looking down | L 0.293 · R 0.258 · mean 0.275 | 0.004 | |
+| Live test, frontal, **eyes closed** | L 0.191 · R 0.131 · mean **0.161** | 0.003 | 2.4× below the open value |
+| Live test, frontal, **mouth wide open** (two frames) | mean 0.407 / 0.447 | **0.869 / 1.001** | ~200× the closed-mouth value |
+| Live test, head turned hard left or right (seven frames) | far eye 0.405 – **1.265**, near eye **0.113** – 0.373; mean 0.26 – 0.81 | 0.007 – 0.162 | See yaw note below |
 
-Closed-eye and open-mouth values are **not yet recorded** — they come from the
-Stage 3 live test.
+The live-test rows are single-frame HUD readings from the developer's Stage 3
+test snapshots (2026-09-13); the full list is in
+[`evaluation/results/stage3_live_observations.csv`](evaluation/results/stage3_live_observations.csv).
 
-**EAR depends on head yaw.** On the frontal portrait the two eyes agree to
-0.005, but in the live run the left eye read a persistent 0.08–0.15 *lower*
-than the right in every 25-frame bin — the sitter was looking at the screen
-rather than into the camera, which foreshortens one eye. The formula itself is
-symmetric, so a per-eye gap of that size is a head-pose signal, not noise.
-Stage 4 measures yaw directly and marks such frames INVALID; Stage 9 must not
-treat them as eye closure.
+**EAR is only meaningful near-frontal.** The formula is symmetric — on the
+frontal portrait the two eyes agree to 0.005 — but head yaw foreshortens the
+eye that is turning away, so the *far* eye's EAR inflates (to a meaningless
+1.265 at extreme yaw) while the *near* eye can read as low as 0.113, a false
+"eye closed". Both error directions appeared in the live test. A large per-eye
+gap is therefore a head-pose signal, not noise: Stage 4 measures yaw directly
+and marks such frames INVALID, and Stage 9 must never treat them as eye closure.
+
+**Open-eye EAR differs between people.** The smiling test portrait sits at
+0.18 with eyes open; the developer at 0.38. A single fixed threshold from the
+literature is unlikely to transfer between drivers — an input to Stage 9's
+design (per-session calibration is one option), not something applied here.
 
 ### Stage 2 — live facial landmarks
 

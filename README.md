@@ -152,10 +152,14 @@ returns a `FaceLandmarks` object (or `None` when no face is present) holding a
   missing face as closed eyes.
 
 Measured on this laptop (640 × 480, CPU): MediaPipe inference **~4 ms** per frame
-with no face in view and **~7–8 ms** with a face; 478 landmarks; grayscale input
-detected the same face at the same rate as RGB. End-to-end throughput is set by
-the camera (~19 FPS live), not by MediaPipe — the same loop runs at 54 FPS with
-rendering and 96 FPS headless when reading from a video file.
+with no face in view, **7–8 ms** on a static test portrait, and **10–13 ms live
+with a real, moving face** (live run, 2026-09-13). The live figure is higher most
+likely because VIDEO mode re-runs the face detector whenever tracking confidence
+dips, which a static image never triggers. 478 landmarks; grayscale input detected
+the same face at the same rate as RGB. End-to-end throughput is set by the camera —
+**20 FPS live** — not by MediaPipe: the same loop runs at 54 FPS with rendering and
+96 FPS headless when reading from a video file. At 20 FPS each frame has a 50 ms
+budget, of which landmarks use ~12 ms, leaving ~38 ms for everything later stages add.
 
 ### Stage 1 — camera only
 

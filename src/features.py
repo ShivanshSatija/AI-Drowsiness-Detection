@@ -76,8 +76,8 @@ import numpy as np
 
 from src.capture import (CameraConfig, CameraError, FPSCounter, FrameSource,
                          create_source, save_snapshot)
-from src.eye_cnn import (EyePreprocessConfig, draw_eye_boxes, draw_eye_panel,
-                         extract_eye_crops, save_eye_crops)
+from src.eye_cnn import (MODEL_PATH, EyePreprocessConfig, EyeStateClassifier, draw_eye_boxes,
+                         draw_eye_panel, extract_eye_crops, save_eye_crops, state_color)
 from src.headpose import POSE_METHODS, HeadPose, PoseConfig, draw_pose, estimate_pose
 from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
                            LandmarkConfig, LandmarkModelError, draw_driver_zone,
@@ -292,6 +292,7 @@ class FeatureRecorder:
 
     POSE_FIELDS = ["yaw_deg", "pitch_deg", "roll_deg", "pose_method"]
     VALIDITY_FIELDS = ["valid", "invalid_reasons"]
+    CNN_FIELDS = ["cnn_left_state", "cnn_left_conf", "cnn_right_state", "cnn_right_conf", "cnn_ms"]
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -304,17 +305,22 @@ class FeatureRecorder:
         self._file = open(self.path, "w", newline="", encoding="utf-8")
         self._writer = csv.writer(self._file)
         self._writer.writerow(["frame", "face_found", "inference_ms"] + GeometricFeatures.csv_fields()
-                              + self.POSE_FIELDS + self.VALIDITY_FIELDS)
+                              + self.POSE_FIELDS + self.VALIDITY_FIELDS + self.CNN_FIELDS)
 
     def write(self, frame_index: int, inference_ms: float, feats: Optional[GeometricFeatures],
-              pose: Optional[HeadPose] = None, assessment: Optional[FrameAssessment] = None) -> None:
+              pose: Optional[HeadPose] = None, assessment: Optional[FrameAssessment] = None,
+              eye_states: Optional[Sequence] = None, cnn_ms: float = 0.0) -> None:
         values = ([getattr(feats, name) for name in GeometricFeatures.csv_fields()]
                   if feats is not None else [""] * len(GeometricFeatures.csv_fields()))
         pose_values = ([round(pose.yaw_deg, 2), round(pose.pitch_deg, 2), round(pose.roll_deg, 2), pose.method]
                        if pose is not None and pose.ok else ["", "", "", ""])
         validity = ([int(assessment.valid), ";".join(assessment.keys)] if assessment is not None else ["", ""])
+        cnn_values: List = []
+        for state in (eye_states or [None, None]):
+            cnn_values += [state[0], round(state[1], 4)] if state else ["", ""]
+        cnn_values.append(round(cnn_ms, 2) if eye_states else "")
         self._writer.writerow([frame_index, int(feats is not None), round(inference_ms, 2)]
-                              + values + pose_values + validity)
+                              + values + pose_values + validity + cnn_values)
         self.rows += 1
 
     def close(self) -> None:
@@ -396,8 +402,13 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
                      feats: Optional[GeometricFeatures], face: Optional[FaceLandmarks],
                      mirror: bool, ear_trace: Sequence[float], mar_trace: Sequence[float],
                      pose: Optional[HeadPose] = None, assessment: Optional[FrameAssessment] = None,
-                     tracker: Optional[InvalidFrameTracker] = None, face_count: int = 0) -> None:
-    """Status overlay. Call after any display mirroring so text reads normally."""
+                     tracker: Optional[InvalidFrameTracker] = None, face_count: int = 0,
+                     eye_states: Optional[Sequence] = None, cnn_ms: float = 0.0,
+                     cnn_status: str = "") -> None:
+    """Status overlay. Call after any display mirroring so text reads normally.
+
+    ``eye_states`` is the CNN's [(label, conf) or None] for (left, right);
+    ``cnn_status`` explains an absent model."""
     height, width = frame.shape[:2]
     valid = assessment.valid if assessment is not None else True
     value_color_eye = COLOR_EYE if valid else COLOR_MUTED
@@ -407,7 +418,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 5 - EAR / MAR / head pose / validity / eye crops", 10, 24)
+    put("Stage 8 - features / pose / validity / eye-state CNN", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -450,6 +461,25 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         put("invalid frames {:4.0%} ({:.0f} s window)   {:4.0%} session".format(
             tracker.window_rate, tracker.window_seconds, tracker.session_rate), 10, 224, (200, 200, 200), 0.5)
 
+    # Stage 8: per-eye CNN state. Shown greyed on INVALID frames - the state is
+    # computed for inspection but must not be interpreted there.
+    if cnn_status:
+        put("CNN: {}".format(cnn_status), 10, 248, COLOR_MUTED, 0.55)
+    elif eye_states is not None and feats is not None:
+        x = 10
+        put("CNN", x, 248, COLOR_TEXT if valid else COLOR_MUTED, 0.6)
+        x += 52
+        for name, state in zip(("L", "R"), eye_states):
+            if state is None:
+                text, color = "{} --".format(name), COLOR_MUTED
+            else:
+                text = "{} {} {:.2f}".format(name, state[0], state[1])
+                color = state_color(state[0]) if valid else COLOR_MUTED
+            put(text, x, 248, color, 0.6)
+            x += 170
+        put("{:.1f} ms{}".format(cnn_ms, "" if valid else "  (not interpreted)"), x, 248,
+            COLOR_MUTED, 0.5)
+
     _trace(frame, ear_trace, width - 210, height - 130, 200, 50, EAR_BAR_MAX, COLOR_EYE, "EAR mean")
     _trace(frame, mar_trace, width - 210, height - 72, 200, 50, MAR_BAR_MAX, COLOR_MOUTH, "MAR")
 
@@ -459,7 +489,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 5 (Features / Pose / Validity / Eye Crops)"
+WINDOW_NAME = "Drowsiness Detection - Stage 8 (Features / Pose / Validity / Eye-state CNN)"
 TRACE_LENGTH = 200
 CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
@@ -478,7 +508,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              record: Optional[Path] = None, pose_config: Optional[PoseConfig] = None,
              validity_config: Optional[ValidityConfig] = None, show_zone: bool = True,
              eye_config: Optional[EyePreprocessConfig] = None, show_crops: bool = True,
-             dump_crops: Optional[Path] = None, dump_every: int = 30) -> int:
+             dump_crops: Optional[Path] = None, dump_every: int = 30,
+             classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "") -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
@@ -487,6 +518,9 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
     crops_valid = 0
     eye_widths: List[float] = []
     dumped = 0
+    cnn_counts = {"left": Counter(), "right": Counter()}   # per-eye OPEN/CLOSED counts on VALID frames
+    cnn_confidences: List[float] = []
+    cnn_times: List[float] = []
     fps_counter = FPSCounter()
     mode_index = DRAW_MODES.index(mode)
     ear_trace: Deque[float] = deque(maxlen=TRACE_LENGTH)
@@ -520,6 +554,14 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             "on" if eye_config.align_roll else "off", "on" if eye_config.equalize else "off"))
         if dump_crops:
             print("[features] Dumping valid eye crops every {} frames to {}".format(dump_every, dump_crops))
+        if classifier is not None:
+            meta = classifier.payload.get("metadata", {})
+            print("[features] CNN      : {} | classes {} | trained {} | test acc {}".format(
+                classifier.payload.get("format"), "/".join(classifier.classes),
+                classifier.payload.get("saved_at", "?"),
+                "{:.4f}".format(meta["test_accuracy"]) if "test_accuracy" in meta else "n/a"))
+        else:
+            print("[features] CNN      : {}".format(cnn_status or "disabled"))
         print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | "
               "z driver zone | c crop panel | e save eye crops | s snapshot")
         if show_window:
@@ -547,6 +589,20 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     and all(c is not None and c.valid for c in crops)):
                 save_eye_crops(crops, dump_crops, tag="f{:06d}".format(frame_index))
                 dumped += 2
+
+            # Stage 8: eye-state CNN on both crops in one forward pass. Computed
+            # whenever the crops exist so the tester can watch it; counted as a
+            # result only on VALID frames.
+            eye_states: Optional[List] = None
+            cnn_ms = 0.0
+            if classifier is not None and face is not None:
+                eye_states, cnn_ms = classifier.predict_crops(crops)
+                cnn_times.append(cnn_ms)
+                if assessment.valid:
+                    for side, state in zip(("left", "right"), eye_states):
+                        if state is not None:
+                            cnn_counts[side][state[0]] += 1
+                            cnn_confidences.append(state[1])
             fps = fps_counter.tick()
             inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
 
@@ -562,7 +618,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 pitches.append(pose.pitch_deg)
                 rolls.append(pose.roll_deg)
             if recorder:
-                recorder.write(frame_index, inference_ms, feats, pose, assessment)
+                recorder.write(frame_index, inference_ms, feats, pose, assessment, eye_states, cnn_ms)
 
             if show_window:
                 display = frame.copy()
@@ -578,9 +634,10 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 if face is not None and pose is not None:
                     draw_pose(display, face, pose, mirror)
                 draw_feature_hud(display, fps, inference_ms, feats, face, mirror, ear_trace, mar_trace,
-                                 pose, assessment, tracker, detector.last_face_count)
+                                 pose, assessment, tracker, detector.last_face_count,
+                                 eye_states, cnn_ms, cnn_status if classifier is None else "")
                 if show_crops:
-                    draw_eye_panel(display, crops, 10, display.shape[0] - 140)
+                    draw_eye_panel(display, crops, 10, display.shape[0] - 140, states=eye_states)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -651,6 +708,12 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                   widths.max(), np.median(widths) * eye_config.crop_scale, eye_config.size, eye_config.size))
     if dump_crops:
         print("[features] Dumped {} eye crop files to {}".format(dumped, dump_crops))
+    if classifier is not None and cnn_times:
+        print("[features] CNN on VALID frames: left {} | right {} | mean confidence {:.3f} | "
+              "inference median {:.1f} ms per frame (both eyes)".format(
+                  dict(cnn_counts["left"]), dict(cnn_counts["right"]),
+                  float(np.mean(cnn_confidences)) if cnn_confidences else float("nan"),
+                  float(np.median(cnn_times))))
     return 0
 
 
@@ -820,6 +883,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dump-crops", type=Path, default=None,
                         help="Save valid eye crops from VALID frames to this folder (e.g. data/eye_crops/session1)")
     parser.add_argument("--dump-every", type=int, default=30, help="With --dump-crops: every N frames (default 30)")
+    parser.add_argument("--model", type=Path, default=MODEL_PATH,
+                        help="Eye-state CNN checkpoint (default models/eye_cnn.pt)")
+    parser.add_argument("--no-cnn", action="store_true", help="Run without the eye-state CNN")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
     parser.add_argument("--no-zone", action="store_true",
                         help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
@@ -849,12 +915,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     eye_config = EyePreprocessConfig(size=args.eye_size, crop_scale=args.crop_scale,
                                      align_roll=not args.no_align, min_eye_width_px=args.min_eye_px)
+
+    classifier: Optional[EyeStateClassifier] = None
+    cnn_status = "disabled (--no-cnn)"
+    if not args.no_cnn:
+        try:
+            classifier = EyeStateClassifier(args.model)
+            if classifier.size != eye_config.size:
+                print("ERROR: model expects {0}x{0} crops but --eye-size is {1}; use --eye-size {0}".format(
+                    classifier.size, eye_config.size), file=sys.stderr)
+                return 1
+            if classifier.config.equalize != eye_config.equalize:
+                eye_config.equalize = classifier.config.equalize  # the model decides how crops are prepared
+        except FileNotFoundError as exc:
+            cnn_status = "no model at {} - running without it".format(args.model)
+            print("[features] {}".format(exc), file=sys.stderr)
+        except ImportError as exc:
+            cnn_status = "PyTorch missing - running without it"
+            print("[features] {}".format(exc), file=sys.stderr)
+
     try:
         return run_demo(create_source(camera), detector, mode=args.mode, mirror=not args.no_mirror,
                         show_window=not args.no_window, max_frames=args.max_frames, record=args.record,
                         pose_config=pose_config, validity_config=validity_config,
                         show_zone=not args.no_zone, eye_config=eye_config, show_crops=not args.no_crops,
-                        dump_crops=args.dump_crops, dump_every=args.dump_every)
+                        dump_crops=args.dump_crops, dump_every=args.dump_every,
+                        classifier=classifier, cnn_status=cnn_status)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

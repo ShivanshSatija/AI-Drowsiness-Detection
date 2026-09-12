@@ -249,11 +249,21 @@ def draw_eye_boxes(frame: np.ndarray, crops: Tuple[Optional[EyeCrop], Optional[E
         cv2.polylines(frame, pts, True, COLOR_CROP_OK if crop.valid else COLOR_CROP_BAD, 1, cv2.LINE_AA)
 
 
+COLOR_OPEN = (0, 255, 0)
+COLOR_CLOSED = (0, 140, 255)
+
+
+def state_color(label: Optional[str]) -> Tuple[int, int, int]:
+    return COLOR_OPEN if label == "OPEN" else COLOR_CLOSED if label == "CLOSED" else (150, 150, 150)
+
+
 def draw_eye_panel(display: np.ndarray, crops: Tuple[Optional[EyeCrop], Optional[EyeCrop]],
-                   x: int, y: int, tile: int = 96) -> None:
+                   x: int, y: int, tile: int = 96,
+                   states: Optional[Sequence[Optional[Tuple[str, float]]]] = None) -> None:
     """Show both preprocessed crops enlarged, left eye first (matches the
     mirrored view where the subject's left eye appears on the left). Call
-    after mirroring; the tiles themselves are never mirrored."""
+    after mirroring; the tiles themselves are never mirrored. ``states`` are
+    the CNN's (label, confidence) per eye when a model is loaded (Stage 8)."""
     for i, crop in enumerate(crops):
         x0 = x + i * (tile + 10)
         cv2.rectangle(display, (x0 - 1, y - 1), (x0 + tile, y + tile), (60, 60, 60), -1)
@@ -263,12 +273,19 @@ def draw_eye_panel(display: np.ndarray, crops: Tuple[Optional[EyeCrop], Optional
             continue
         big = cv2.resize(crop.gray, (tile, tile), interpolation=cv2.INTER_NEAREST)
         display[y:y + tile, x0:x0 + tile] = cv2.cvtColor(big, cv2.COLOR_GRAY2BGR)
-        color = COLOR_CROP_OK if crop.valid else COLOR_CROP_BAD
-        cv2.rectangle(display, (x0 - 1, y - 1), (x0 + tile, y + tile), color, 1)
+        state = states[i] if states is not None and i < len(states) else None
+        color = (state_color(state[0]) if state else COLOR_CROP_OK) if crop.valid else COLOR_CROP_BAD
+        cv2.rectangle(display, (x0 - 1, y - 1), (x0 + tile, y + tile), color, 2 if state else 1)
         label = "{} {:.0f}px".format("L" if crop.side == "left" else "R", crop.eye_width_px)
         cv2.putText(display, label, (x0 + 3, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(display, label, (x0 + 3, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-        if not crop.valid:
+        if state:
+            text = "{} {:.2f}".format(state[0], state[1])
+            cv2.putText(display, text, (x0 + 3, y + tile - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3,
+                        cv2.LINE_AA)
+            cv2.putText(display, text, (x0 + 3, y + tile - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1,
+                        cv2.LINE_AA)
+        elif not crop.valid:
             cv2.putText(display, "invalid", (x0 + 3, y + tile - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                         COLOR_CROP_BAD, 1, cv2.LINE_AA)
 
@@ -480,6 +497,29 @@ class EyeStateClassifier:
     def predict_crop(self, crop: EyeCrop) -> Tuple[str, float]:
         labels, probs = self.predict(crop.tensor[None])
         return self.classes[int(labels[0])], float(probs[0, labels[0]])
+
+    def predict_crops(self, crops: Sequence[Optional[EyeCrop]]
+                      ) -> Tuple[List[Optional[Tuple[str, float]]], float]:
+        """Classify a (left, right) pair in ONE forward pass.
+
+        Returns ([left, right], inference_ms) where each entry is
+        (label, confidence) or None when that crop is missing or geometrically
+        invalid. Stage 8's live loop calls this once per frame.
+        """
+        tensors, index = [], []
+        for i, crop in enumerate(crops):
+            if crop is not None and crop.valid:
+                tensors.append(crop.tensor)
+                index.append(i)
+        results: List[Optional[Tuple[str, float]]] = [None] * len(crops)
+        if not tensors:
+            return results, 0.0
+        t0 = time.perf_counter()
+        labels, probs = self.predict(np.stack(tensors))
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        for k, i in enumerate(index):
+            results[i] = (self.classes[int(labels[k])], float(probs[k, labels[k]]))
+        return results, elapsed_ms
 
 
 # =============================================================================

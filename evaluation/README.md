@@ -151,3 +151,14 @@ The script is headless and cannot verify the interactive parts. Run
 
 `Alt+F4` does **not** close the window — OpenCV's HighGUI window class ignores
 it. That is expected, not a defect.
+
+## results/stage4_pose_validation.csv
+
+Head-pose validation on the developer's twelve Stage 3 snapshots, flipped back
+to the un-mirrored orientation before detection. Columns give yaw, pitch, roll
+and the assumed-intrinsics distance for both estimators (pnp and matrix) plus
+the labelled turn direction (+1 = subject's left, -1 = right, 0 = frontal).
+Result on 2026-09-13: both estimators got the direction right in all 7 turned
+frames; matrix read 3-12 deg on the frontal frames while pnp read up to 39 deg
+on the two mouth-open frames - the reason matrix is the default estimator.
+Frame images are not committed.

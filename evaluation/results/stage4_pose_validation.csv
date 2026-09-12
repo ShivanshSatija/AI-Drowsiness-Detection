@@ -1,0 +1,13 @@
+snapshot_time,label,expected_yaw_sign,pnp_yaw_deg,pnp_pitch_deg,pnp_roll_deg,pnp_distance_cm,matrix_yaw_deg,matrix_pitch_deg,matrix_roll_deg,matrix_distance_cm
+2026-09-13 01:21:40,"frontal, eyes open",0,22.2,-11.6,-4.4,46,11.6,-10.7,-3.2,34
+2026-09-13 01:21:44,"frontal, half-closed / looking down",0,9.6,-14.5,-2.4,47,3.2,-14.6,-1.4,34
+2026-09-13 01:21:49,"frontal, mouth open",0,33.6,-9.0,-1.3,42,6.5,-4.1,1.1,35
+2026-09-13 01:21:56,"frontal, eyes closed",0,19.5,-5.8,-4.8,48,9.7,-2.7,-4.2,35
+2026-09-13 01:21:58,"frontal, mouth open",0,38.7,-8.0,-3.1,40,9.6,-4.5,-1.2,35
+2026-09-13 01:22:04,turned LEFT (strong),1,51.8,3.1,-9.8,53,48.8,3.4,-6.9,35
+2026-09-13 01:22:09,turned RIGHT (extreme),-1,-50.8,-4.1,1.8,50,-44.9,-4.8,-1.7,33
+2026-09-13 01:22:21,turned LEFT (strong),1,61.4,-6.7,-4.3,55,56.7,-8.2,3.0,36
+2026-09-13 01:22:25,turned RIGHT (strong),-1,-49.2,-7.3,-5.1,55,-43.6,-5.1,-9.2,35
+2026-09-13 01:25:13,turned LEFT (moderate),1,41.5,-7.2,-5.1,46,35.6,-7.9,-3.7,33
+2026-09-13 01:25:21,turned slightly RIGHT / looking down (slight),-1,-40.6,-5.7,5.4,45,-34.1,-5.9,3.7,33
+2026-09-13 01:25:23,turned LEFT (strong),1,45.2,-6.1,-8.4,47,40.5,-4.3,-5.9,33

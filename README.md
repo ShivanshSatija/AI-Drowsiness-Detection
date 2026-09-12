@@ -7,7 +7,7 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stage 3 of 15 complete** (camera → landmarks → live EAR / MAR).
+> **Status: Stage 4 of 15 complete** (camera → landmarks → EAR / MAR → head pose → VALID / INVALID frames).
 > No detection results are reported yet. Every number published in this README will
 > come from a real experiment; nothing is estimated or copied from other papers.
 
@@ -69,7 +69,8 @@ AI-Drowsiness-Detection/
 ├── src/
 │   ├── capture.py          camera abstraction + live preview   [Stage 1]
 │   ├── landmarks.py        MediaPipe Face Landmarker           [Stage 2]
-│   ├── features.py         EAR / MAR / head pose               [Stages 3-4]
+│   ├── features.py         EAR / MAR, frame validity gate      [Stages 3-4]
+│   ├── headpose.py         head pose: yaw / pitch / roll       [Stage 4]
 │   ├── eye_cnn.py          eye-state CNN inference             [Stages 7-8]
 │   ├── temporal.py         PERCLOS / blink / yawn / nod + FSM  [Stage 9]
 │   ├── alert.py            escalating laptop alerts            [Stage 10]
@@ -122,6 +123,88 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 4 — head pose and frame validity
+
+```bat
+python -m src.features                        :: live: EAR / MAR + yaw / pitch / roll + VALID / INVALID + invalid rate
+python -m src.features --max-yaw 25           :: change the yaw limit (default 30 deg - initial value, untuned)
+python -m src.features --pose-method pnp      :: cross-check estimator ('p' key cycles live)
+python -m src.features --record data\s4.csv   :: per-frame CSV now also has yaw, pitch, roll, valid, reasons
+python -m src.headpose                        :: head-pose self-test: rotation maths, PnP round trip
+python -m src.features --self-test            :: formulas + validity gate + invalid-frame tracker
+```
+
+The Stage 3 demo grew into this one (same command). New on the HUD: the yaw /
+pitch / roll line with an arrow from the nose in the facing direction, a green
+**VALID FRAME** or red **INVALID: …reasons…** banner, and the invalid-frame rate
+over a rolling 60 s window and for the session. On an INVALID frame the EAR and
+MAR values are still shown but greyed "(not interpreted)" and are excluded from
+the traces — they must never be read as eye or mouth state.
+
+**Head pose** ([`src/headpose.py`](src/headpose.py)). Convention: **yaw > 0 =
+turned to the subject's left, pitch > 0 = looking up, roll > 0 = tilt toward the
+left shoulder.** Two independent estimators are implemented so one can check the
+other:
+
+| Method | How | Role |
+|---|---|---|
+| `matrix` | Angles from the 4 × 4 transformation MediaPipe fits to its canonical face model (all 468 points) | **default** |
+| `pnp` | `cv2.solvePnP` on six landmarks (nose tip 1, chin 152, eye corners 33 / 263, mouth corners 61 / 291) against a generic 3-D face model, focal length assumed = frame width | cross-check |
+
+**Why `matrix` is the default — measured, not assumed.** Both estimators were
+put through the same tests (full numbers in
+[`evaluation/results/stage4_pose_validation.csv`](evaluation/results/stage4_pose_validation.csv)):
+
+| Test | `pnp` | `matrix` |
+|---|---|---|
+| Mirror the image → yaw and roll flip sign, pitch unchanged | ✅ | ✅ |
+| Rotate the image ±15° in-plane → roll changes by exactly ∓15° | −15.0 / +15.5 | −15.0 / +15.5 |
+| 7 real head-turn frames (developer's Stage 3 snapshots, direction labelled) → yaw sign correct | 7 / 7 | 7 / 7 |
+| Strong turns | 45–61° | 40–57° |
+| Moderate turn smaller than strong ones | ✅ | ✅ |
+| **5 frontal frames → ǀyawǀ < 20°** | ❌ +10 … **+39°** | ✅ +3 … +12° |
+| Agreement across the 12 frames | r = 0.96, mean ǀΔǀ 9.9°, `matrix` ≈ 0.83 × `pnp` | |
+
+PnP's yaw read **+34° and +39° on the two frontal frames with the mouth wide
+open** — opening the mouth moves the chin and mouth-corner landmarks, which the
+generic closed-mouth model interprets as a head turn. That would flip a 30°
+validity gate during every yawn, exactly when Stage 9 needs valid frames most.
+`matrix` read +7° and +10° on the same frames. Two more findings: planar
+perspective warps of a photo are **not** a valid proxy for head rotation
+(MediaPipe's learned 3-D prior largely ignores them, so that part of the test
+battery was discarded — only real turns and exact transforms count); and the
+developer's frontal frames read **pitch ≈ −11°** with both methods, because a
+laptop camera sits above the line of sight — Stage 9's nod detection must work
+on pitch *changes* relative to a baseline, never on absolute pitch.
+
+**Frame validity** ([`src/features.py`](src/features.py), `assess_frame`). A
+frame is **INVALID** when any of these hold — and the HUD lists every reason:
+
+| Check | Reason key | Initial threshold (configurable, **untuned**) |
+|---|---|---|
+| No face detected | `no_face` | — |
+| Faces present but none inside the driver zone | `no_driver_in_zone` | zone radius 0.40 (Stage 2) |
+| Face too small to measure reliably | `face_too_small` | width < 80 px |
+| Face partly outside the frame | `face_at_edge` | any landmark within 4 px of the border |
+| Degenerate landmark geometry (NaN EAR / MAR) | `degenerate_landmarks` | — |
+| Eyes too narrow for EAR to be precise | `eye_too_small` | narrowest eye < 15 px |
+| Head pose could not be estimated | `pose_unavailable` | — |
+| Head turned too far | `yaw` | ǀyawǀ > 30° |
+| Head tilted too far up / down (optional) | `pitch` | **off** by default — nods vs looking down is Stage 9's call |
+
+`InvalidFrameTracker` keeps the rate over a rolling window (60 s, the future
+temporal window) and for the session, plus a histogram of reason keys printed
+at exit — that histogram is how the thresholds will be tuned from real
+sessions.
+
+**Measured so far (Stage 4):**
+
+| Run | Result |
+|---|---|
+| Live webcam, nobody in view, 250 frames | 250 / 250 INVALID, reason `no_face`; 3.5 ms inference — the no-face path verified on real hardware |
+| Synthetic two-face video (test portrait scaled to a ~75 px face) | 100 % INVALID: `face_too_small` (75 px < 80) and `eye_too_small` (14 px < 15) — the gate correctly refuses a face at roughly 2 m equivalent |
+| Live test with a real face — yaw distribution while driving-like head movement, resulting invalid rate | **pending** (Stage 4 live test) |
 
 ### Stage 3 — Eye Aspect Ratio and Mouth Aspect Ratio
 
@@ -307,7 +390,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 1 | Project foundation + webcam capture | ✅ done |
 | 2 | MediaPipe Face Landmarker — 478 real-time landmarks | ✅ done |
 | 3 | EAR + MAR from landmarks, live display + CSV recording | ✅ done |
-| 4 | Head pose + invalid-frame handling | ⬜ |
+| 4 | Head pose (yaw / pitch / roll) + INVALID-frame gate + invalid-frame rate | ✅ done |
 | 5 | Eye-region cropping and preprocessing | ⬜ |
 | 6 | MRL eye dataset preparation (subject-independent split) | ⬜ |
 | 7 | Eye-state CNN training and evaluation | ⬜ |

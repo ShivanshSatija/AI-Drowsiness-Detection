@@ -120,6 +120,7 @@ class LandmarkConfig:
     min_tracking_confidence: float = 0.5    # frame-to-frame tracking
     grayscale_input: bool = False           # collapse to gray, then back to 3 channels
     verify_model_hash: bool = True
+    output_transformation_matrix: bool = True  # 4x4 face pose matrix, used by Stage 4's "matrix" estimator
     # --- which face is the driver ---
     driver_anchor: Tuple[float, float] = (0.5, 0.5)  # expected driver face position (normalised)
     driver_zone_radius: float = 0.40        # faces farther than this from the anchor are never the driver
@@ -138,6 +139,7 @@ class FaceLandmarks:
     inference_ms: float               # time spent inside MediaPipe for this frame
     faces_in_frame: int = 1           # how many faces MediaPipe found in this frame
     selection: str = "single"         # why this face: "single", "lock" or "nearest anchor"
+    transformation_matrix: Optional[np.ndarray] = None  # MediaPipe's 4x4 face pose, if requested
 
     @property
     def count(self) -> int:
@@ -205,13 +207,12 @@ def _box_iou(a: Tuple[float, float, float, float], b: Tuple[float, float, float,
     return inter / union if union > 0 else 0.0
 
 
-def dedupe_faces(faces: List[np.ndarray], iou_threshold: float = 0.5) -> Tuple[List[np.ndarray], int]:
-    """Drop duplicate detections of the same face.
+def dedupe_indices(faces: List[np.ndarray], iou_threshold: float = 0.5) -> List[int]:
+    """Indices of the faces that survive duplicate suppression, in original order.
 
     Right after a re-detection MediaPipe can return two landmark sets for one
     person (the tracked face plus a fresh detection of it). Of any pair whose
-    boxes overlap with IoU >= ``iou_threshold`` the larger is kept. Returns the
-    surviving faces in their original order and the number removed.
+    boxes overlap with IoU >= ``iou_threshold`` the larger is kept.
     """
     order = sorted(range(len(faces)), key=lambda i: -face_width(faces[i]))
     kept: List[int] = []
@@ -220,6 +221,12 @@ def dedupe_faces(faces: List[np.ndarray], iou_threshold: float = 0.5) -> Tuple[L
         if all(_box_iou(box, _norm_box(faces[j])) < iou_threshold for j in kept):
             kept.append(i)
     kept.sort()
+    return kept
+
+
+def dedupe_faces(faces: List[np.ndarray], iou_threshold: float = 0.5) -> Tuple[List[np.ndarray], int]:
+    """Surviving faces and the number of duplicates removed."""
+    kept = dedupe_indices(faces, iou_threshold)
     return [faces[i] for i in kept], len(faces) - len(kept)
 
 
@@ -271,6 +278,7 @@ class FaceLandmarkDetector:
             min_face_detection_confidence=self.config.min_detection_confidence,
             min_face_presence_confidence=self.config.min_presence_confidence,
             min_tracking_confidence=self.config.min_tracking_confidence,
+            output_facial_transformation_matrixes=self.config.output_transformation_matrix,
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._start = time.monotonic()
@@ -355,8 +363,14 @@ class FaceLandmarkDetector:
 
         faces = [np.array([[lm.x, lm.y, lm.z] for lm in landmarks], dtype=np.float32)
                  for landmarks in result.face_landmarks]
-        faces, duplicates = dedupe_faces(faces)
-        self.stats.duplicate_detections += duplicates
+        matrices = list(getattr(result, "facial_transformation_matrixes", None) or [])
+        if len(matrices) != len(faces):
+            matrices = [None] * len(faces)
+
+        kept = dedupe_indices(faces)
+        self.stats.duplicate_detections += len(faces) - len(kept)
+        faces = [faces[i] for i in kept]
+        matrices = [matrices[i] for i in kept]
         self.last_face_count = len(faces)
         self.last_ignored_boxes = []
         if not faces:
@@ -372,9 +386,11 @@ class FaceLandmarkDetector:
 
         self.last_ignored_boxes = [_pixel_box(f, width, height) for i, f in enumerate(faces) if i != index]
         self.stats.faces += 1
+        matrix = matrices[index]
         return FaceLandmarks(normalized=faces[index], frame_size=(width, height),
                              timestamp_ms=timestamp_ms, inference_ms=inference_ms,
-                             faces_in_frame=len(faces), selection=reason)
+                             faces_in_frame=len(faces), selection=reason,
+                             transformation_matrix=None if matrix is None else np.asarray(matrix, dtype=np.float64))
 
 
 # --- drawing -----------------------------------------------------------------

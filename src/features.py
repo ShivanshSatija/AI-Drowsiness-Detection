@@ -84,6 +84,7 @@ from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
                            draw_ignored_faces, draw_landmarks)
 from src.temporal import Observation, TemporalConfig, TemporalEngine, TemporalState, draw_temporal_panel
 from src.alert import AlertConfig, AlertManager, AlertStatus, draw_alert_overlay
+from src.hardware import BuzzerLink, word_for
 
 # --- landmark index sets (MediaPipe canonical topology) ---------------------
 # Order matters: p1..p6 for the EAR formula.
@@ -429,7 +430,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 10 - features / pose / validity / CNN / temporal / alerts", 10, 24)
+    put("Stage 11 - features / pose / validity / CNN / temporal / alerts / ESP32", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -500,7 +501,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 10 (Features / Pose / Validity / CNN / Temporal / Alerts)"
+WINDOW_NAME = "Drowsiness Detection - Stage 11 (Features / Pose / Validity / CNN / Temporal / Alerts / ESP32)"
 TRACE_LENGTH = 200
 CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
@@ -522,7 +523,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              dump_crops: Optional[Path] = None, dump_every: int = 30,
              classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "",
              temporal_config: Optional[TemporalConfig] = None,
-             alert_config: Optional[AlertConfig] = None, alerts: bool = True) -> int:
+             alert_config: Optional[AlertConfig] = None, alerts: bool = True,
+             serial_port: Optional[str] = "auto") -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
@@ -531,6 +533,13 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
     # Stage 10: the alert layer only ever sees TemporalState - never frames or features.
     alerter: Optional[AlertManager] = AlertManager(alert_config or AlertConfig()) if alerts else None
     alert_status: Optional[AlertStatus] = None
+    # Stage 11: the ESP32 buzzer link. Its thread owns the port; one set_state() per frame here.
+    buzzer: Optional[BuzzerLink] = None
+    if serial_port:
+        try:
+            buzzer = BuzzerLink(port=serial_port)
+        except ImportError as exc:
+            print("[esp32] {} - running without the buzzer".format(exc), file=sys.stderr)
     alert_button: List[Optional[Tuple[int, int, int, int]]] = [None]   # DISMISS button rect, display px
     reset_clicked: List[bool] = [False]                                # set by the mouse callback
     time_in_state: Counter = Counter()
@@ -601,6 +610,9 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                       alerter.audio.beeper_name, alerter.audio.speaker.backend, alerter.log.path))
         else:
             print("[features] Alerts   : disabled (--no-alerts)")
+        print("[features] ESP32    : {}".format(
+            "port {} | words ALERT/MILD/DROWSY/CLEAR | heartbeat 1 s | d mute -> CLEAR".format(serial_port)
+            if buzzer is not None else "disabled (--no-serial)"))
         print("[features] Keys     : q/ESC quit | r reset alert -> back to ALERT (or click DISMISS) | "
               "d mute alert audio | m mesh mode | g gray input | p pose method | z driver zone | "
               "c crop panel | e save eye crops | s snapshot")
@@ -674,6 +686,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             # Stage 10: alerts follow the state; update() never blocks (audio is on its own thread).
             if alerter is not None:
                 alert_status = alerter.update(temporal_state)
+            if buzzer is not None:
+                buzzer.set_state(word_for(temporal_state, alert_status))
             fps = fps_counter.tick()
             inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
 
@@ -714,6 +728,13 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     draw_temporal_panel(display, temporal_state, display.shape[1] - 250, 46)
                 if alerter is not None:
                     alert_button[0] = draw_alert_overlay(display, alert_status, alerter.config.flash_hz)
+                if buzzer is not None:
+                    link_text = buzzer.status_text()
+                    cv2.putText(display, link_text, (display.shape[1] - 8 * len(link_text) - 12, display.shape[0] - 148),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+                    cv2.putText(display, link_text, (display.shape[1] - 8 * len(link_text) - 12, display.shape[0] - 148),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 0) if buzzer.connected else (160, 160, 160),
+                                1, cv2.LINE_AA)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -759,6 +780,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 print("[features] Reached --max-frames {}.".format(max_frames))
                 break
 
+    if buzzer is not None:
+        buzzer.close()                      # sends CLEAR, then closes the port
     if alerter is not None:
         alerter.close()
     if recorder:
@@ -822,6 +845,11 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             else " (no alert, no log file written)"))
         if alerter.audio.errors:
             print("[alert] audio errors: {}".format(alerter.audio.errors))
+    if buzzer is not None:
+        st = buzzer.stats
+        print("[esp32] {} | connects {} | disconnects {} | sent {} | acks {} | errors {} | board: {}".format(
+            "was connected on {}".format(buzzer.port) if st.connects else "never connected",
+            st.connects, st.disconnects, st.sent, st.acks, st.errors, st.ready_line or "no READY seen"))
     return 0
 
 
@@ -1002,6 +1030,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--microsleep", type=float, default=1.5,
                         help="Closure in seconds that forces DROWSY (default 1.5, untuned)")
     parser.add_argument("--yawn-mar", type=float, default=0.60, help="MAR threshold for a yawn (default 0.60, untuned)")
+    parser.add_argument("--serial", default="auto",
+                        help="ESP32 buzzer port: COMx, or auto (default) = first USB-serial bridge; retries every 3 s")
+    parser.add_argument("--no-serial", action="store_true", help="Stage 11 off: no ESP32 link")
     parser.add_argument("--no-alerts", action="store_true", help="Stage 10 off: no overlay, no sound, no log")
     parser.add_argument("--mute", action="store_true", help="Alerts decided, drawn and logged, but no sound")
     parser.add_argument("--tts", choices=("auto", "pyttsx3", "powershell", "none"), default="auto",
@@ -1085,7 +1116,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         show_zone=not args.no_zone, eye_config=eye_config, show_crops=not args.no_crops,
                         dump_crops=args.dump_crops, dump_every=args.dump_every,
                         classifier=classifier, cnn_status=cnn_status, temporal_config=temporal_config,
-                        alert_config=alert_config, alerts=not args.no_alerts)
+                        alert_config=alert_config, alerts=not args.no_alerts,
+                        serial_port=None if args.no_serial else args.serial)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

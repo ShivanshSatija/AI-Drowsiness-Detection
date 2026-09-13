@@ -80,6 +80,7 @@ AI-Drowsiness-Detection/
 │   ├── eye_cnn.py          eye crop preprocessing [Stage 5], CNN [Stages 7-8]
 │   ├── temporal.py         60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis, replay [Stage 9]
 │   ├── alert.py            escalating alerts: visual → beep → voice, cooldowns, dismissal, event log, replay [Stage 10]
+│   ├── hardware.py         USB-serial link to the ESP32 buzzer: auto-detect, heartbeat, reconnect, fake board [Stage 11]
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
 │   └── app.py              Streamlit dashboard                 [Stage 12]
 ├── training/
@@ -134,6 +135,66 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 11 — physical alarm: ESP32-WROOM-32 + buzzer over USB serial
+
+Full wiring, pin table, protocol, Arduino IDE setup, three-step test procedure
+and safety notes: **[hardware/README.md](hardware/README.md)**.
+
+```bat
+pip install pyserial                                      :: once (already in requirements.txt)
+python -m src.hardware --list                             :: serial ports; the ESP32 bridge is marked, Bluetooth ports are never chosen
+python -m src.hardware --test                             :: step 2: Python -> ESP32 protocol test, no AI (~15 s)
+python -m src.hardware --monitor                          :: type ALERT / MILD / DROWSY / CLEAR / PING / STATUS / TEST
+python -m src.features                                    :: step 3: --serial auto is the default; keeps looking if no board
+python -m src.features --serial COM9                      :: fixed port
+python -m src.features --no-serial                        :: Stage 10 behaviour
+python -m src.hardware --self-test                        :: Python side against a protocol-exact fake board, no hardware
+```
+
+```
+Python AI  --USB serial 115200, ASCII lines-->  ESP32 (hardware/drowsiness_alarm/drowsiness_alarm.ino)  --GPIO 23-->  buzzer
+```
+
+| Word (laptop → board) | Board reply | Buzzer |
+|---|---|---|
+| `HELLO` | `OK HELLO` | arms the 3 s link watchdog |
+| `ALERT` | `OK ALERT` | silent |
+| `MILD` | `OK MILD` | 100 ms chirp every 2 s |
+| `DROWSY` | `OK DROWSY` | 150 ms on / 150 ms off |
+| `CLEAR` | `OK CLEAR` | silent until the next MILD / DROWSY |
+| `PING` / `STATUS` / `TEST` | `PONG …` / `STATUS …` / local 6 s demo | — |
+| *(3 s without a command after HELLO)* | `LINK LOST` | forced silent, LED blinks |
+
+**Division of labour.** The ESP32 runs no MediaPipe, no CNN and no decision
+logic: a line parser, a `millis()` pattern engine and a watchdog. The laptop
+maps the Stage 9 state to a word in `src.hardware.word_for()` — driver muted
+the laptop audio with `d` → `CLEAR`, otherwise `ALERT` / `MILD` / `DROWSY` —
+and `BuzzerLink` owns the port on its own thread: send on change, heartbeat
+every second, reopen every 3 s when unplugged, `CLEAR` on exit. The vision loop
+does one `set_state()` per frame (measured 0.01 ms). Auto-detection accepts
+only real USB-serial bridges by VID/PID (CP210x, CH340, CH9102, FTDI,
+Espressif); this laptop's six Bluetooth COM ports are excluded by name.
+
+**Fail-silent by design.** If the laptop program crashes or the cable comes
+out, the buzzer stops within 3 s and the board's LED blinks slowly. A stuck
+physical alarm would be a false alarm, and the laptop's Stage 10 alerts remain
+the primary channel. The alarm patterns are engineering choices for the first
+hardware test, not measured results.
+
+**Verified so far (2026-09-13) — software only, no board was available.** The
+6-part self-test: `word_for()` maps 1:1 and mute → `CLEAR`; the fake board
+speaks the exact protocol (READY, case-insensitive commands, ERR, watchdog →
+LINK LOST); the link greets with HELLO + state on connect, `set_state()` costs
+0.01 ms, a state change is on the wire in 16 ms, the heartbeat keeps the
+watchdog fed, `CLEAR` is sent on close; after a simulated unplug the link
+reconnects and greets the new board; with no board it stays harmless and keeps
+retrying; auto-detect lists 6 ports here, all Bluetooth, and chooses none.
+Integrated headless run with `--serial auto` and no board: pipeline unaffected,
+link reports "not connected (searching...)". **Not yet done:** compiling and
+flashing the sketch, and steps 1–3 of the test procedure on the real ESP32 —
+Arduino IDE is not installed on the development laptop, so the firmware is
+unverified until the user builds it.
 
 ### Stage 10 — escalating laptop alerts: visual → beep → voice
 
@@ -744,7 +805,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 8 | CNN integrated into the live pipeline | 🔶 integrated and verified with interim weights; live test waits for the final model |
 | 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ✅ live acted-drowsiness test done 2026-09-13 (`data/drowsy_session.csv`, 124 s: ALERT → MILD at 9.4 s on PERCLOS, → DROWSY at 36.4 s on a microsleep); thresholds are still the initial values — tuning on recordings is open |
 | 10 | Escalating laptop alert system | 🔶 implemented: visual → beep → voice with cooldowns, dismissal, non-blocking audio thread, event log; 8-scenario self-test and replay of the recorded session pass; live test with sound on pending |
-| 11 | ESP32 + buzzer physical alarm | ⬜ |
+| 11 | ESP32 + buzzer physical alarm | 🔶 firmware + Python link + integration written; Python side verified against a protocol-exact fake board; **not yet run on the real ESP32** — hardware test pending |
 | 12 | Streamlit dashboard + event logging | ⬜ |
 | 13 | NoIR camera conversion + 850 nm IR illumination | ⬜ |
 | 14 | Full hardware integration + day/dim/IR testing | ⬜ |

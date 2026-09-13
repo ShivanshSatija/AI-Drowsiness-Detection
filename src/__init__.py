@@ -10,7 +10,7 @@ Modules are added stage by stage:
                   Stage 7  - CNN, augmentation, checkpoint I/O, classifier [code done, untrained]
     temporal.py   Stage 9  - 60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis [done, untuned]
     alert.py      Stage 10 - escalating laptop alerts: visual -> beep -> voice, cooldowns, dismissal, log [done]
-    hardware.py   Stage 11 - ESP32 serial link
+    hardware.py   Stage 11 - USB-serial link to the ESP32 buzzer: port discovery, heartbeat, reconnect [done]
     app.py        Stage 12 - Streamlit dashboard
 """
 

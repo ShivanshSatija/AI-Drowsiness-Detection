@@ -32,7 +32,8 @@ torch>=2.2
 pyttsx3>=2.90
 
 # --- Stage 11: ESP32 serial link ------------------------------------------
-# pyserial>=3.5
+# USB serial to the buzzer board (hardware/drowsiness_alarm). Tested 3.5.
+pyserial>=3.5
 
 # --- Stage 12: Streamlit dashboard + logging ------------------------------
 # streamlit>=1.33

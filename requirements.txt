@@ -36,8 +36,12 @@ pyttsx3>=2.90
 pyserial>=3.5
 
 # --- Stage 12: Streamlit dashboard + logging ------------------------------
-# streamlit>=1.33
-# pandas>=2.0
+# Dashboard only (src/app.py). The detector itself never imports these:
+# src/features.py and src/pipeline.py run without them. Session logging uses
+# the standard library sqlite3. Tested streamlit 1.63.0 / pandas 3.0.5;
+# st.fragment(run_every=...) needs streamlit >= 1.37.
+streamlit>=1.37
+pandas>=2.0
 
 # --- Stage 15: evaluation and plots ---------------------------------------
 # scikit-learn>=1.4

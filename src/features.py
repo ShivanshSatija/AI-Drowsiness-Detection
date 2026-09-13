@@ -430,7 +430,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 11 - features / pose / validity / CNN / temporal / alerts / ESP32", 10, 24)
+    put("Stage 12 - features / pose / validity / CNN / temporal / alerts / ESP32 / log", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -501,7 +501,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 11 (Features / Pose / Validity / CNN / Temporal / Alerts / ESP32)"
+WINDOW_NAME = "Drowsiness Detection - Stage 12 (Features / Pose / Validity / CNN / Temporal / Alerts / ESP32 / Log)"
 TRACE_LENGTH = 200
 CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
@@ -524,95 +524,44 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "",
              temporal_config: Optional[TemporalConfig] = None,
              alert_config: Optional[AlertConfig] = None, alerts: bool = True,
-             serial_port: Optional[str] = "auto") -> int:
+             serial_port: Optional[str] = "auto", session_db: Optional[Path] = None,
+             metrics_interval: float = 1.0) -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
-    temporal = TemporalEngine(temporal_config or TemporalConfig())
+    # Stage 12: the per-frame chain (Stages 2-11) lives in src.pipeline and is shared with the
+    # Streamlit dashboard. Local import: pipeline.py imports this module for the Stage 3/4 functions.
+    from src.pipeline import DrowsinessPipeline
+    from src.session_log import SessionLogger
+    session_log = (SessionLogger(session_db, metrics_interval_s=metrics_interval, echo=True)
+                   if session_db else None)
+    pipeline = DrowsinessPipeline(detector, classifier=classifier, pose_config=pose_config,
+                                  validity_config=validity_config, eye_config=eye_config,
+                                  temporal_config=temporal_config, alert_config=alert_config, alerts=alerts,
+                                  serial_port=serial_port, session_log=session_log, cnn_status=cnn_status)
+    temporal, alerter, buzzer, tracker = pipeline.temporal, pipeline.alerter, pipeline.buzzer, pipeline.tracker
     temporal_state: Optional[TemporalState] = None
-    # Stage 10: the alert layer only ever sees TemporalState - never frames or features.
-    alerter: Optional[AlertManager] = AlertManager(alert_config or AlertConfig()) if alerts else None
     alert_status: Optional[AlertStatus] = None
-    # Stage 11: the ESP32 buzzer link. Its thread owns the port; one set_state() per frame here.
-    buzzer: Optional[BuzzerLink] = None
-    if serial_port:
-        try:
-            buzzer = BuzzerLink(port=serial_port)
-        except ImportError as exc:
-            print("[esp32] {} - running without the buzzer".format(exc), file=sys.stderr)
     alert_button: List[Optional[Tuple[int, int, int, int]]] = [None]   # DISMISS button rect, display px
     reset_clicked: List[bool] = [False]                                # set by the mouse callback
-    time_in_state: Counter = Counter()
-    tracker = InvalidFrameTracker(validity_config.window_seconds)
-    crops_total = 0
-    crops_valid = 0
-    eye_widths: List[float] = []
     dumped = 0
-    cnn_counts = {"left": Counter(), "right": Counter()}   # per-eye OPEN/CLOSED counts on VALID frames
-    cnn_confidences: List[float] = []
-    cnn_times: List[float] = []
-    fps_counter = FPSCounter()
     mode_index = DRAW_MODES.index(mode)
     ear_trace: Deque[float] = deque(maxlen=TRACE_LENGTH)
     mar_trace: Deque[float] = deque(maxlen=TRACE_LENGTH)
-    ears: List[float] = []
-    ears_left: List[float] = []
-    ears_right: List[float] = []
-    mars: List[float] = []
-    yaws: List[float] = []
-    pitches: List[float] = []
-    rolls: List[float] = []
     recorder = FeatureRecorder(record) if record else None
     frame_index = 0
     started = time.perf_counter()
-    started_t: Optional[float] = None       # first observation time, for readable log lines
 
     with source, detector:
         if recorder:
             recorder.open()
             print("[features] Recording per-frame values to {}".format(recorder.path))
+        pipeline.start_session(source.description)
         print("[features] Camera   : {}".format(source.description))
-        print("[features] Pose     : method {}".format(pose_config.method))
-        print("[features] Validity : |yaw| <= {} deg, |pitch| {}, face >= {} px, eye >= {} px, "
-              "edge margin {} px, window {} s".format(
-                  validity_config.max_abs_yaw_deg,
-                  "off" if validity_config.max_abs_pitch_deg is None
-                  else "<= {} deg".format(validity_config.max_abs_pitch_deg),
-                  validity_config.min_face_width_px, validity_config.min_eye_width_px,
-                  validity_config.edge_margin_px, validity_config.window_seconds))
-        print("[features] Eyes     : {}x{} crops, scale {} x eye width, roll alignment {}, CLAHE {}".format(
-            eye_config.size, eye_config.size, eye_config.crop_scale,
-            "on" if eye_config.align_roll else "off", "on" if eye_config.equalize else "off"))
+        for line in pipeline.describe():
+            print("[features] " + line)
         if dump_crops:
             print("[features] Dumping valid eye crops every {} frames to {}".format(dump_every, dump_crops))
-        if classifier is not None:
-            meta = classifier.payload.get("metadata", {})
-            print("[features] CNN      : {} | classes {} | trained {} | test acc {}".format(
-                classifier.payload.get("format"), "/".join(classifier.classes),
-                classifier.payload.get("saved_at", "?"),
-                "{:.4f}".format(meta["test_accuracy"]) if "test_accuracy" in meta else "n/a"))
-        else:
-            print("[features] CNN      : {}".format(cnn_status or "disabled"))
-        tc = temporal.config
-        print("[features] Temporal : {:.0f} s window | eyes {} | PERCLOS mild {:.2f}/{:.2f} drowsy {:.2f}/{:.2f} "
-              "(enter/exit) | microsleep {:.1f} s | yawn MAR >= {:.2f} for {:.1f} s | nod drop {:.0f} deg | "
-              "dwell up {:.0f} s down {:.0f} s".format(
-                  tc.window_s, tc.fusion, tc.perclos_mild_enter, tc.perclos_mild_exit, tc.perclos_drowsy_enter,
-                  tc.perclos_drowsy_exit, tc.microsleep_s, tc.mar_yawn_thr, tc.min_yawn_s, tc.nod_drop_deg,
-                  tc.up_dwell_s, tc.down_dwell_s))
-        if alerter is not None:
-            ac = alerter.config
-            print("[features] Alerts   : MILD -> visual{} | DROWSY -> beep every {:.0f} s | voice after {:.0f} s in "
-                  "DROWSY or {:.1f} s closed eyes, repeat every {:.0f} s | key d mutes audio {:.0f} s | audio {} | "
-                  "beep {} | tts {} | log {}".format(
-                      " + soft beep" if ac.mild_beep_on_entry else "", ac.beep_interval_s, ac.voice_after_s,
-                      ac.voice_closure_s, ac.voice_cooldown_s, ac.dismiss_s, "on" if ac.audio else "OFF (--mute)",
-                      alerter.audio.beeper_name, alerter.audio.speaker.backend, alerter.log.path))
-        else:
-            print("[features] Alerts   : disabled (--no-alerts)")
-        print("[features] ESP32    : {}".format(
-            "port {} | words ALERT/MILD/DROWSY/CLEAR | heartbeat 1 s | d mute -> CLEAR".format(serial_port)
-            if buzzer is not None else "disabled (--no-serial)"))
         print("[features] Keys     : q/ESC quit | r reset alert -> back to ALERT (or click DISMISS) | "
               "d mute alert audio | m mesh mode | g gray input | p pose method | z driver zone | "
               "c crop panel | e save eye crops | s snapshot")
@@ -633,75 +582,20 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             if frame is None:
                 print("[features] No frame received - stream ended or camera lost.")
                 break
-            frame_index += 1
-
-            face = detector.process(frame)
-            feats = compute_features(face) if face is not None else None
-            pose = estimate_pose(face, pose_config) if face is not None else None
-            assessment = assess_frame(face, feats, pose, validity_config, detector.last_face_count)
-            tracker.update(assessment)
-            crops = extract_eye_crops(frame, face, eye_config) if face is not None else (None, None)
-            for crop in crops:
-                if crop is not None:
-                    crops_total += 1
-                    crops_valid += int(crop.valid)
-                    eye_widths.append(crop.eye_width_px)
+            # Stages 2-11 in one call; see src/pipeline.py (same calls, same order as before Stage 12).
+            result = pipeline.process(frame)
+            frame_index = result.frame_index
+            face, feats, pose, assessment = result.face, result.feats, result.pose, result.assessment
+            crops, eye_states, cnn_ms = result.crops, result.eye_states, result.cnn_ms
+            observation, temporal_state, alert_status = result.observation, result.temporal_state, result.alert_status
+            fps, inference_ms = result.fps, result.inference_ms
             if (dump_crops and frame_index % dump_every == 0 and assessment.valid
                     and all(c is not None and c.valid for c in crops)):
                 save_eye_crops(crops, dump_crops, tag="f{:06d}".format(frame_index))
                 dumped += 2
 
-            # Stage 8: eye-state CNN on both crops in one forward pass. Computed
-            # whenever the crops exist so the tester can watch it; counted as a
-            # result only on VALID frames.
-            eye_states: Optional[List] = None
-            cnn_ms = 0.0
-            if classifier is not None and face is not None:
-                eye_states, cnn_ms = classifier.predict_crops(crops)
-                cnn_times.append(cnn_ms)
-                if assessment.valid:
-                    for side, state in zip(("left", "right"), eye_states):
-                        if state is not None:
-                            cnn_counts[side][state[0]] += 1
-                            cnn_confidences.append(state[1])
-            # Stage 9: feed the temporal layer. Invalid frames go in flagged so the
-            # window can count them; their measurements are ignored inside.
-            closed_probs = [(st[1] if st[0] == "CLOSED" else 1.0 - st[1]) for st in (eye_states or []) if st]
-            observation = Observation(
-                t=assessment.time_s, valid=assessment.valid,
-                ear=feats.ear_mean if feats is not None else None,
-                mar=feats.mar if feats is not None else None,
-                pitch_deg=pose.pitch_deg if (pose is not None and pose.ok) else None,
-                cnn_closed_prob=float(np.mean(closed_probs)) if closed_probs else None)
-            if started_t is None:
-                started_t = observation.t
-            previous_state = temporal_state.state if temporal_state is not None else None
-            temporal_state = temporal.update(observation)
-            if previous_state is not None:
-                time_in_state[previous_state] += 1
-            if temporal.transitions and temporal.transitions[-1][0] == observation.t:
-                _, from_state, to_state, why = temporal.transitions[-1]
-                print("[temporal] {:7.1f} s  {} -> {}  ({})".format(
-                    observation.t - temporal._frames[0][0] if temporal._frames else 0.0, from_state, to_state, why))
-            # Stage 10: alerts follow the state; update() never blocks (audio is on its own thread).
-            if alerter is not None:
-                alert_status = alerter.update(temporal_state)
-            if buzzer is not None:
-                buzzer.set_state(word_for(temporal_state, alert_status))
-            fps = fps_counter.tick()
-            inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
-
-            if feats is not None:
-                ears.append(feats.ear_mean)
-                ears_left.append(feats.ear_left)
-                ears_right.append(feats.ear_right)
-                mars.append(feats.mar)
             ear_trace.append(feats.ear_mean if (feats is not None and assessment.valid) else math.nan)
             mar_trace.append(feats.mar if (feats is not None and assessment.valid) else math.nan)
-            if pose is not None and pose.ok:
-                yaws.append(pose.yaw_deg)
-                pitches.append(pose.pitch_deg)
-                rolls.append(pose.roll_deg)
             if recorder:
                 recorder.write(frame_index, inference_ms, feats, pose, assessment, eye_states, cnn_ms,
                                temporal_state, alert_status)
@@ -742,15 +636,12 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     print("[features] Quit key pressed.")
                     break
                 if key == ord("d") and alerter is not None:
-                    alerter.dismiss()
+                    pipeline.dismiss()
                 if (key == ord("r") or reset_clicked[0]) and alerter is not None:
                     # Full reset: alert cleared AND the state machine back to ALERT with an
                     # empty window. A still-drowsy driver is re-detected within seconds.
                     reset_clicked[0] = False
-                    alerter.reset()
-                    temporal.reset(observation.t)
-                    print("[features] {:7.1f} s  alert reset by driver -> state ALERT, window cleared".format(
-                        observation.t - started_t if started_t is not None else 0.0))
+                    pipeline.reset()
                 if key == ord("m"):
                     mode_index = (mode_index + 1) % len(DRAW_MODES)
                 if key == ord("g"):
@@ -780,10 +671,12 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 print("[features] Reached --max-frames {}.".format(max_frames))
                 break
 
-    if buzzer is not None:
-        buzzer.close()                      # sends CLEAR, then closes the port
-    if alerter is not None:
-        alerter.close()
+    session_summary = pipeline.close()      # buzzer CLEAR + close, alert log close, session row finished
+    ears, ears_left, ears_right, mars = pipeline.ears, pipeline.ears_left, pipeline.ears_right, pipeline.mars
+    yaws, pitches, rolls = pipeline.yaws, pipeline.pitches, pipeline.rolls
+    crops_total, crops_valid, eye_widths = pipeline.crops_total, pipeline.crops_valid, pipeline.eye_widths
+    cnn_counts, cnn_confidences, cnn_times = pipeline.cnn_counts, pipeline.cnn_confidences, pipeline.cnn_times
+    time_in_state = pipeline.time_in_state
     if recorder:
         recorder.close()
         print("[features] Wrote {} rows to {}".format(recorder.rows, recorder.path))
@@ -850,6 +743,12 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
         print("[esp32] {} | connects {} | disconnects {} | sent {} | acks {} | errors {} | board: {}".format(
             "was connected on {}".format(buzzer.port) if st.connects else "never connected",
             st.connects, st.disconnects, st.sent, st.acks, st.errors, st.ready_line or "no READY seen"))
+    if session_summary.get("session_id") is not None:
+        print("[session] logged as session #{} in {} ({} events, {} metric rows) - "
+              "python -m src.session_log --show {}".format(
+                  session_summary["session_id"], session_summary["session_db"],
+                  pipeline.session_log.events_written, pipeline.session_log.metrics_written,
+                  session_summary["session_id"]))
     return 0
 
 
@@ -1033,6 +932,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serial", default="auto",
                         help="ESP32 buzzer port: COMx, or auto (default) = first USB-serial bridge; retries every 3 s")
     parser.add_argument("--no-serial", action="store_true", help="Stage 11 off: no ESP32 link")
+    parser.add_argument("--db", type=Path, default=Path("logs/sessions.db"),
+                        help="Stage 12 session log (SQLite): sessions, transitions, alerts, 1 Hz metrics")
+    parser.add_argument("--no-db", action="store_true", help="Do not write the session log")
+    parser.add_argument("--metrics-interval", type=float, default=1.0,
+                        help="Seconds between metric rows in the session log (default 1)")
     parser.add_argument("--no-alerts", action="store_true", help="Stage 10 off: no overlay, no sound, no log")
     parser.add_argument("--mute", action="store_true", help="Alerts decided, drawn and logged, but no sound")
     parser.add_argument("--tts", choices=("auto", "pyttsx3", "powershell", "none"), default="auto",
@@ -1117,7 +1021,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         dump_crops=args.dump_crops, dump_every=args.dump_every,
                         classifier=classifier, cnn_status=cnn_status, temporal_config=temporal_config,
                         alert_config=alert_config, alerts=not args.no_alerts,
-                        serial_port=None if args.no_serial else args.serial)
+                        serial_port=None if args.no_serial else args.serial,
+                        session_db=None if args.no_db else args.db, metrics_interval=args.metrics_interval)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

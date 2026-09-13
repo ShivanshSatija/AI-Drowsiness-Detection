@@ -1,0 +1,14 @@
+# Streamlit settings for the Stage 12 dashboard (python -m streamlit run src/app.py)
+
+[server]
+headless = true            # never open a browser tab or ask for an e-mail in the terminal
+port = 8501
+runOnSave = false
+fileWatcherType = "none"   # the detector runs on a background thread; do not restart it on file edits
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#ff4b4b"

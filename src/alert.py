@@ -384,7 +384,8 @@ class AlertManager:
     """
 
     def __init__(self, config: Optional[AlertConfig] = None, audio: Optional[AudioWorker] = None,
-                 log: Optional[AlertLog] = None, echo: bool = True) -> None:
+                 log: Optional[AlertLog] = None, echo: bool = True,
+                 on_event: Optional[Callable[[TemporalState, str, int, str], None]] = None) -> None:
         self.config = config or AlertConfig()
         cfg = self.config
         self.audio = audio or AudioWorker(enabled=cfg.audio,
@@ -400,6 +401,7 @@ class AlertManager:
         self.last_voice_t = -math.inf
         self.status: Optional[AlertStatus] = None
         self.events: List[Tuple[float, str, int]] = []   # (t, event, level) - in memory for tests / summary
+        self.on_event = on_event                          # Stage 12: session log hook (ts, event, level, detail)
         self._dismiss_requested = False
         self._reset_requested = False
         self._ever_updated = False
@@ -554,6 +556,8 @@ class AlertManager:
             detail += " [audio off]"
         self.events.append((ts.t, event, level))
         self.log.write(ts.t, event, level, ts.state, detail, ts.perclos, ts.closure_now_s, ts.reasons)
+        if self.on_event is not None:
+            self.on_event(ts, event, level, detail)
 
 
 # --- display ------------------------------------------------------------------------

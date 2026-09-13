@@ -81,8 +81,9 @@ AI-Drowsiness-Detection/
 │   ├── temporal.py         60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis, replay [Stage 9]
 │   ├── alert.py            escalating alerts: visual → beep → voice, cooldowns, dismissal, event log, replay [Stage 10]
 │   ├── hardware.py         USB-serial link to the ESP32 buzzer: auto-detect, heartbeat, reconnect, fake board [Stage 11]
-│   ├── hardware.py         ESP32 serial link                   [Stage 11]
-│   └── app.py              Streamlit dashboard                 [Stage 12]
+│   ├── pipeline.py         the shared per-frame chain (Stages 2→11) + thread / process runners for UIs [Stage 12]
+│   ├── session_log.py      SQLite session log: sessions, events, 1 Hz metrics; --list/--show/--export [Stage 12]
+│   └── app.py              Streamlit dashboard (live feed, metrics, charts, event log, session summary) [Stage 12]
 ├── training/
 │   ├── inspect_mrl.py      report the dataset's real structure  [Stage 6]
 │   ├── prepare_mrl.py      subject-independent split -> .npz   [Stage 6]
@@ -135,6 +136,98 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 12 — Streamlit dashboard and SQLite session logging
+
+```bat
+pip install -r requirements.txt                          :: adds streamlit + pandas (dashboard only)
+python -m streamlit run src\app.py                        :: dashboard -> http://localhost:8501  (Ctrl+C stops it)
+python -m src.features                                    :: the OpenCV tool still works without Streamlit; now also logs to SQLite
+python -m src.features --no-db                            :: ... without the session log
+python -m src.pipeline --device 0 --max-frames 300        :: the dashboard's backend, headless, no Streamlit
+python -m src.session_log --list                          :: sessions in logs\sessions.db
+python -m src.session_log --show 3                        :: one session: config, summary, every event
+python -m src.session_log --export 3 --out logs\s3        :: events.csv + metrics.csv
+python -m src.session_log --self-test
+```
+
+In the dashboard: choose the camera (**0** for the laptop webcam, or a video
+path), thresholds, alerts, ESP32 port and database in the sidebar, press
+**Start**. Settings lock while running; **Stop**, change, **Start** again.
+**Mute audio** and **Reset alert** do what `d` and `r` do in the OpenCV window.
+Close `python -m src.features` first — only one program can hold the camera.
+
+**What the page shows** ([`src/app.py`](src/app.py)):
+
+| Requirement | Where |
+|---|---|
+| Live camera feed | annotated frame (landmarks, eye boxes, pose axes, state label, Stage 10 banner + DISMISS button), refreshed 3×/s |
+| Current drowsiness state | large ALERT / MILD / DROWSY badge with time in state and the Stage 9 reasons; alert level badge underneath |
+| EAR, MAR, PERCLOS | metric tiles (PERCLOS over the 60 s window) |
+| Blink duration | mean duration of blinks completed in the window, with blink rate |
+| Yawn rate, nod count | tiles (per minute of window / count in window) |
+| Head pose | yaw, pitch, roll tiles (method shown in the tooltip) |
+| FPS | end-to-end FPS tile with landmark inference time; caption under the frame |
+| Invalid-frame rate | 60 s window and whole session; the current frame's INVALID reasons under the badges |
+| Event log | tab: transitions, alerts, driver actions (mute / reset), ESP32 link changes — newest first, wall clock and pipeline time |
+| Session summary | tab: duration, frames, FPS, face rate, inference, invalid rate, seconds and share per state, transitions, whole-session blink / closure / yawn / nod totals, alert events by type, EAR/MAR/pose medians, ESP32 counters; stays after Stop |
+| Charts | EAR + MAR, PERCLOS + current closure, state timeline (last 300 samples) |
+| Past sessions | any earlier session from the SQLite file: summary, thresholds JSON, metrics chart, events, CSV downloads |
+
+**Architecture — the core stays usable without Streamlit.** The per-frame
+chain that `run_demo` had accumulated since Stage 3 now lives in
+[`src/pipeline.py`](src/pipeline.py) as `DrowsinessPipeline` — the same
+calls in the same order (detector → EAR/MAR → pose → validity → eye crops →
+CNN → temporal → alerts → buzzer), plus the session log. Three front ends
+share it: the OpenCV tool (`src.features`, unchanged keys and `--record`
+CSV), the headless runner (`python -m src.pipeline`) and the dashboard.
+Streamlit and pandas are imported only by `src/app.py`.
+
+**The detector runs in its own process** (`PipelineProcess`), not in a thread
+of the Streamlit server. Measured on the development laptop, 2026-09-13: a
+Python thread hogging the interpreter lock starved MediaPipe — 10 frames in 6 s
+against 32 FPS alone — and Streamlit's page reruns are exactly that kind of
+load: the first in-process dashboard ran the detector at **6.3 FPS with 118 ms
+landmark inference** (24 ms headless). Across a process boundary the same test
+video ran at **35–40 FPS with 17–18 ms inference** while the page redrew. The
+page only reads snapshots from a queue; Start/Stop/Mute/Reset are commands on
+a second queue.
+
+**Session log** ([`src/session_log.py`](src/session_log.py)) —
+`logs/sessions.db`, SQLite in WAL mode so the dashboard reads while the
+detector writes:
+
+| Table | One row per | Columns (abridged) |
+|---|---|---|
+| `sessions` | run | `started_at`, `ended_at`, camera, thresholds JSON, frames, duration, summary JSON |
+| `events` | transition / alert / driver action / ESP32 link change | `wall_ts` (ISO, ms), `t_s` (pipeline seconds), kind, event, from/to state, alert level, detail, and the metrics at that instant: state, PERCLOS, closure, EAR, MAR, yaw, pitch |
+| `metrics` | second (configurable) | state, validity, EAR L/R/mean, MAR, yaw/pitch/roll, CNN P(closed), PERCLOS, blink rate + duration, closure now/longest, yawns, nods, invalid rate, FPS, inference ms, alert level, buzzer word, ESP32 connected |
+
+Both front ends write it (`--db`, `--no-db`, `--metrics-interval` on the
+OpenCV tool). The Stage 10 alert CSV and the Stage 3 `--record` per-frame CSV
+still exist for full-rate traces; this is the always-on, queryable record that
+Stage 15's evaluation can join by time.
+
+**Verified so far (2026-09-13).**
+*Refactor safety:* the same headless command on the 400-frame test video
+before and after moving the glue into `pipeline.py` produced `--record` CSVs
+whose detection columns (EAR, MAR, pose, validity, crops) are **identical in
+all 400 rows**; the only differing cells are the state columns on 3 frames
+because the forced MILD transition fell one frame earlier (2.7 s vs 2.8 s of
+wall-clock time), i.e. run-to-run timing, not logic. All module self-tests pass
+(features, temporal, alert, hardware, session_log — the last covers throttled
+metrics, NaN → NULL, cross-thread writes, concurrent reads, two sessions in one
+file, CSV export). *Dashboard, driven from a browser on the test video:*
+live frame and every tile updated; the forced MILD transition appeared as a
+`transition` event and its `RAISED` / `BEEP` alerts in the event log and in
+the SQLite `events` table; the summary tab and the past-sessions browser
+rendered the finished session (summary table, metrics chart, event table,
+CSV downloads); detector at 35–40 FPS while the page redrew. The user's own
+first `src.features` run on the webcam after the refactor was logged as
+session #1 (63 s, 1184 frames, final DROWSY, 17 alert events).
+**Not yet done:** a webcam run started from the dashboard by the user, and
+the eye CNN in the dashboard (no `models/eye_cnn.pt` exists yet — the Stage 7
+training output has not been copied in; the banner says so).
 
 ### Stage 11 — physical alarm: ESP32-WROOM-32 + buzzer over USB serial
 
@@ -806,7 +899,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ✅ live acted-drowsiness test done 2026-09-13 (`data/drowsy_session.csv`, 124 s: ALERT → MILD at 9.4 s on PERCLOS, → DROWSY at 36.4 s on a microsleep); thresholds are still the initial values — tuning on recordings is open |
 | 10 | Escalating laptop alert system | 🔶 implemented: visual → beep → voice with cooldowns, dismissal, non-blocking audio thread, event log; 8-scenario self-test and replay of the recorded session pass; live test with sound on pending |
 | 11 | ESP32 + buzzer physical alarm | 🔶 firmware + Python link + integration written; Python side verified against a protocol-exact fake board; **not yet run on the real ESP32** — hardware test pending |
-| 12 | Streamlit dashboard + event logging | ⬜ |
+| 12 | Streamlit dashboard + event logging | 🔶 implemented and verified on the test video from the browser: live feed, state, all metrics, charts, event log, session summary, past-session browser; SQLite log of transitions / alerts / metrics from both front ends; detector isolated in its own process (40 FPS under the dashboard vs 6 FPS in-process). Webcam run from the dashboard by the user pending |
 | 13 | NoIR camera conversion + 850 nm IR illumination | ⬜ |
 | 14 | Full hardware integration + day/dim/IR testing | ⬜ |
 | 15 | Final evaluation, ablation study, documentation | ⬜ |

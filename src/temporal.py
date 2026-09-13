@@ -244,6 +244,7 @@ class TemporalEngine:
         self._enter_since: Dict[str, Optional[float]] = {MILD: None, DROWSY: None}
         self._exit_since: Optional[float] = None
         self.transitions: List[Tuple[float, str, str, str]] = []   # (t, from, to, reason)
+        self.event_totals: Dict[str, int] = {"blink": 0, "closure": 0, "yawn": 0, "nod": 0}  # whole session (Stage 12 summary)
 
     # -- window maintenance ------------------------------------------------------
     def _trim(self, now: float) -> None:
@@ -260,8 +261,10 @@ class TemporalEngine:
             return
         if max_s is not None and duration > max_s and kind_long is not None:
             self._events.append(Event(kind_long, run.start, run.start + duration))
+            self.event_totals[kind_long] = self.event_totals.get(kind_long, 0) + 1
         elif max_s is None or duration <= max_s or kind_long is None:
             self._events.append(Event(kind_short, run.start, run.start + duration))
+            self.event_totals[kind_short] = self.event_totals.get(kind_short, 0) + 1
 
     # -- per-frame update ----------------------------------------------------------
     def update(self, obs: Observation) -> TemporalState:

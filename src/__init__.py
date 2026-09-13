@@ -11,7 +11,9 @@ Modules are added stage by stage:
     temporal.py   Stage 9  - 60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis [done, untuned]
     alert.py      Stage 10 - escalating laptop alerts: visual -> beep -> voice, cooldowns, dismissal, log [done]
     hardware.py   Stage 11 - USB-serial link to the ESP32 buzzer: port discovery, heartbeat, reconnect [done]
-    app.py        Stage 12 - Streamlit dashboard
+    pipeline.py   Stage 12 - the shared per-frame chain (Stages 2-11) + thread / process runners for UIs [done]
+    session_log.py Stage 12 - SQLite session log: sessions, events (transitions, alerts, driver, link), metrics [done]
+    app.py        Stage 12 - Streamlit dashboard on top of pipeline.PipelineProcess [done]
 """
 
 __version__ = "0.1.0"

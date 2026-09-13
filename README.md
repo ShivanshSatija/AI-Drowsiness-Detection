@@ -96,6 +96,7 @@ AI-Drowsiness-Detection/
 ├── hardware/               ESP32 sketch, wiring, photos        [Stage 11]
 ├── evaluation/
 │   ├── camera_baseline.py  camera acceptance test + baseline   [Stage 1]
+│   ├── stage13_camera_check.py  identify / measure / live / compare for the NoIR conversion [Stage 13]
 │   ├── results/            committed baseline measurements
 │   └── evaluate.py         full system evaluation              [Stage 15]
 ├── data/                   local only, not committed
@@ -136,6 +137,48 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 13 — NoIR conversion of the USB webcam + 850 nm IR illumination
+
+Full procedure, risks and test plan: **[hardware/noir_conversion.md](hardware/noir_conversion.md)**.
+One physical step at a time; each ends with a STOP and a report before the next.
+
+```bat
+python evaluation\stage13_camera_check.py identify                                   :: cameras by Windows name + OpenCV index, controls, colour balance
+python evaluation\stage13_camera_check.py measure --device N --label usb-unmodified-room --notes "room light, 60 cm"
+python evaluation\stage13_camera_check.py live --device N                            :: focus / saturation / 3x3 evenness / IR-spot readouts
+python evaluation\stage13_camera_check.py compare usb-unmodified-room noir-daylight  :: before/after table
+python evaluation\camera_baseline.py --device N --label usb-webcam-unmodified        :: Stage 1 acceptance test, still valid
+```
+
+**What the tool records per step** (JSON in `evaluation/results/stage13/`,
+committed): the capture path (FPS, drops, latency), the image (brightness,
+B/G/R balance and their spread — the IR-leak indicator; focus score;
+saturated fraction — the hotspot indicator; 3×3 brightness map and uniformity
+ratio — the evenness indicator), the largest saturated blob (the TV-remote
+test), and the **detector on that camera**: end-to-end FPS, landmark inference
+time, face rate, valid-frame rate, invalid reasons, EAR median/std, eye width
+in pixels, head pose. The `live` helper shows the same numbers on the preview
+with a best-so-far focus marker for refocusing after reassembly.
+
+**Order of work.** (1) Windows Camera app, `identify`, `camera_baseline`,
+`measure` and the remote test on the **unmodified** USB webcam, plus photos
+to judge whether the camera can be opened (screw-in lens barrel over a
+sensor board = suitable; sealed autofocus module or filter on the sensor
+package = not suitable). (2) Open, free the lens counting the turns, find the
+filter — it may be glued to the back of the lens barrel, sit as a loose glass
+in the holder, or be part of the sensor package; the sheen test and the
+bare-sensor remote test decide. (3) Remove, reassemble, refocus on printed
+text with the live helper. (4) Remote, daylight, dim and dark measurements.
+(5) Illuminator: safe distance, small board, no diffuser; dark-room
+measurement with IR on versus off; the 3×3 map decides whether a diffuser is
+justified.
+
+**Status (2026-09-13):** tooling verified on the laptop webcam with nobody in
+front of it (`laptop-webcam-reference` JSON: 30.3 FPS, 0 drops, 2.8 ms no-face
+inference, face rate 0 %, B/G/R spread 7.1 — a colour camera with its filter in
+place); the USB webcam was not yet connected. No physical step has been taken. Every number that will appear in this section
+must come from the recorded JSONs.
 
 ### Stage 12 — Streamlit dashboard and SQLite session logging
 
@@ -900,7 +943,7 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 10 | Escalating laptop alert system | 🔶 implemented: visual → beep → voice with cooldowns, dismissal, non-blocking audio thread, event log; 8-scenario self-test and replay of the recorded session pass; live test with sound on pending |
 | 11 | ESP32 + buzzer physical alarm | 🔶 firmware + Python link + integration written; Python side verified against a protocol-exact fake board; **not yet run on the real ESP32** — hardware test pending |
 | 12 | Streamlit dashboard + event logging | 🔶 implemented and verified on the test video from the browser: live feed, state, all metrics, charts, event log, session summary, past-session browser; SQLite log of transitions / alerts / metrics from both front ends; detector isolated in its own process (40 FPS under the dashboard vs 6 FPS in-process). Webcam run from the dashboard by the user pending |
-| 13 | NoIR camera conversion + 850 nm IR illumination | ⬜ |
+| 13 | NoIR camera conversion + 850 nm IR illumination | 🔶 tooling + written procedure ready (`evaluation/stage13_camera_check.py`, `hardware/noir_conversion.md`); waiting for the USB webcam: pre-modification checks, then one physical step at a time |
 | 14 | Full hardware integration + day/dim/IR testing | ⬜ |
 | 15 | Final evaluation, ablation study, documentation | ⬜ |
 

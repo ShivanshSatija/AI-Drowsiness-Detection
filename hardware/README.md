@@ -1,5 +1,7 @@
 # Stage 11 — physical alarm: ESP32-WROOM-32 + buzzer
 
+> Stage 13 (NoIR webcam conversion + 850 nm illuminator) is documented separately in [noir_conversion.md](noir_conversion.md).
+
 The laptop runs the entire AI. The ESP32 runs **no** MediaPipe, **no** CNN and
 no decision logic: it receives one word over USB serial and drives one buzzer.
 

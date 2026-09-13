@@ -1,0 +1,58 @@
+{
+  "timestamp": "2026-09-13T19:00:42",
+  "pnp_cameras": [
+    {
+      "name": "Integrated Webcam",
+      "status": "OK",
+      "class": "Camera",
+      "instance_id": "USB\\VID_1BCF&PID_2BA8&MI_00\\6&26B1C020&0&0000",
+      "vid": "1BCF",
+      "pid": "2BA8",
+      "usb": true,
+      "looks_integrated": true
+    }
+  ],
+  "opencv_indices": [
+    {
+      "index": 0,
+      "backend": "DSHOW",
+      "resolution": [
+        640,
+        480
+      ],
+      "props": {
+        "fps": 0.0,
+        "auto_exposure": -1.0,
+        "exposure": -6.0,
+        "gain": 1.0,
+        "brightness": 0.0,
+        "contrast": 0.0,
+        "saturation": 64.0,
+        "sharpness": 2.0,
+        "auto_wb": 1.0,
+        "wb_temperature": -1.0,
+        "backlight": 3.0,
+        "autofocus": -1.0,
+        "focus": -1.0,
+        "zoom": -1.0,
+        "fourcc": "YUY2"
+      },
+      "delivers_frames": true,
+      "read_ms_avg": 77.8,
+      "first_frame": {
+        "mean_brightness": 162.1,
+        "channel_means": {
+          "blue": 156.57,
+          "green": 162.08,
+          "red": 164.27
+        },
+        "channel_spread": 7.7,
+        "focus_laplacian_var": 34.81
+      }
+    }
+  ],
+  "environment": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "opencv": "4.11.0"
+  }
+}

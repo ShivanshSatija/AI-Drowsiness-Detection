@@ -1,0 +1,106 @@
+{
+  "label": "laptop-webcam-reference",
+  "notes": "integrated laptop webcam, indoor light, tool verification run",
+  "timestamp": "2026-09-13T19:00:57",
+  "device": {
+    "index": "0",
+    "description": "WebcamSource(device=0, backend=DSHOW, 0x0)",
+    "open_s": 4.561,
+    "props": {
+      "fps": 30.0,
+      "auto_exposure": -1.0,
+      "exposure": -6.0,
+      "gain": 1.0,
+      "brightness": 0.0,
+      "contrast": 0.0,
+      "saturation": 64.0,
+      "sharpness": 2.0,
+      "auto_wb": 1.0,
+      "wb_temperature": -1.0,
+      "backlight": 3.0,
+      "autofocus": -1.0,
+      "focus": -1.0,
+      "zoom": -1.0,
+      "fourcc": "YUY2"
+    },
+    "requested": [
+      640,
+      480
+    ]
+  },
+  "capture": {
+    "measured_fps": 30.31,
+    "dropped": 0,
+    "drop_rate": 0.0,
+    "latency_ms": {
+      "median": 28.12,
+      "p95": 43.38,
+      "max": 45.42
+    }
+  },
+  "image": {
+    "mean_brightness": 135.136,
+    "std_brightness": 25.299,
+    "channel_means": {
+      "blue": 129.78,
+      "green": 135.244,
+      "red": 136.893
+    },
+    "focus_laplacian_var": 76.621,
+    "saturated_fraction": 0.0,
+    "dark_fraction": 0.0,
+    "grid_uniformity_ratio": 0.693,
+    "grid_brightness_last": [
+      [
+        144.3,
+        144.2,
+        144.9
+      ],
+      [
+        141.7,
+        138.7,
+        130.3
+      ],
+      [
+        139.7,
+        117.9,
+        89.2
+      ]
+    ],
+    "brightness_over_time_std": 3.341,
+    "channel_spread": 7.11
+  },
+  "bright_spot": {
+    "saturated_fraction": 0.0,
+    "largest_blob_px": 0,
+    "largest_blob_xy": null,
+    "threshold": 240
+  },
+  "detection": {
+    "frames": 150,
+    "fps_end_to_end": 30.31,
+    "inference_ms": {
+      "median": 2.8093,
+      "p5": 2.3406,
+      "p95": 3.4836,
+      "std": 0.9076,
+      "n": 150
+    },
+    "face_rate": 0.0,
+    "valid_rate": 0.0,
+    "invalid_reasons": {
+      "no_face": 150
+    },
+    "ear_valid_frames": null,
+    "eye_width_px": null,
+    "yaw_deg": null,
+    "pitch_deg": null,
+    "cnn_closed_prob": null,
+    "cnn": "disabled (--no-cnn)"
+  },
+  "environment": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "opencv": "4.11.0",
+    "python": "3.11.9"
+  }
+}

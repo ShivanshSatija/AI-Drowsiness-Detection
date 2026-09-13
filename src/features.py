@@ -500,7 +500,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
 
 # --- live demo ---------------------------------------------------------------
 
-WINDOW_NAME = "Drowsiness Detection - Stage 9 (Features / Pose / Validity / CNN / Temporal)"
+WINDOW_NAME = "Drowsiness Detection - Stage 10 (Features / Pose / Validity / CNN / Temporal / Alerts)"
 TRACE_LENGTH = 200
 CROP_DIR_RAW = Path(__file__).resolve().parent.parent / "data" / "eye_crops" / "raw"
 
@@ -531,6 +531,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
     # Stage 10: the alert layer only ever sees TemporalState - never frames or features.
     alerter: Optional[AlertManager] = AlertManager(alert_config or AlertConfig()) if alerts else None
     alert_status: Optional[AlertStatus] = None
+    alert_button: List[Optional[Tuple[int, int, int, int]]] = [None]   # DISMISS button rect, display px
+    reset_clicked: List[bool] = [False]                                # set by the mouse callback
     time_in_state: Counter = Counter()
     tracker = InvalidFrameTracker(validity_config.window_seconds)
     crops_total = 0
@@ -554,6 +556,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
     recorder = FeatureRecorder(record) if record else None
     frame_index = 0
     started = time.perf_counter()
+    started_t: Optional[float] = None       # first observation time, for readable log lines
 
     with source, detector:
         if recorder:
@@ -598,10 +601,20 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                       alerter.audio.beeper_name, alerter.audio.speaker.backend, alerter.log.path))
         else:
             print("[features] Alerts   : disabled (--no-alerts)")
-        print("[features] Keys     : q/ESC quit | d dismiss alert audio | m mesh mode | g gray input | "
-              "p pose method | z driver zone | c crop panel | e save eye crops | s snapshot")
+        print("[features] Keys     : q/ESC quit | r reset alert -> back to ALERT (or click DISMISS) | "
+              "d mute alert audio | m mesh mode | g gray input | p pose method | z driver zone | "
+              "c crop panel | e save eye crops | s snapshot")
         if show_window:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+
+            def on_mouse(event, x, y, flags, param):          # the on-screen DISMISS button
+                rect = alert_button[0]
+                if event == cv2.EVENT_LBUTTONDOWN and rect is not None:
+                    x0, y0, x1, y1 = rect
+                    if x0 <= x <= x1 and y0 <= y <= y1:
+                        reset_clicked[0] = True
+
+            cv2.setMouseCallback(WINDOW_NAME, on_mouse)
 
         while True:
             frame = source.read()
@@ -648,6 +661,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 mar=feats.mar if feats is not None else None,
                 pitch_deg=pose.pitch_deg if (pose is not None and pose.ok) else None,
                 cnn_closed_prob=float(np.mean(closed_probs)) if closed_probs else None)
+            if started_t is None:
+                started_t = observation.t
             previous_state = temporal_state.state if temporal_state is not None else None
             temporal_state = temporal.update(observation)
             if previous_state is not None:
@@ -698,7 +713,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 if temporal_state is not None:
                     draw_temporal_panel(display, temporal_state, display.shape[1] - 250, 46)
                 if alerter is not None:
-                    draw_alert_overlay(display, alert_status, alerter.config.flash_hz)
+                    alert_button[0] = draw_alert_overlay(display, alert_status, alerter.config.flash_hz)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
@@ -707,6 +722,14 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     break
                 if key == ord("d") and alerter is not None:
                     alerter.dismiss()
+                if (key == ord("r") or reset_clicked[0]) and alerter is not None:
+                    # Full reset: alert cleared AND the state machine back to ALERT with an
+                    # empty window. A still-drowsy driver is re-detected within seconds.
+                    reset_clicked[0] = False
+                    alerter.reset()
+                    temporal.reset(observation.t)
+                    print("[features] {:7.1f} s  alert reset by driver -> state ALERT, window cleared".format(
+                        observation.t - started_t if started_t is not None else 0.0))
                 if key == ord("m"):
                     mode_index = (mode_index + 1) % len(DRAW_MODES)
                 if key == ord("g"):

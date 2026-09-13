@@ -36,7 +36,11 @@ Design rules (the roadmap's requirements)
   The overlay is a few ``cv2`` rectangles and strings on the main thread.
 * **No continuous alarm.** Each audible level has a cooldown; the queue holds
   at most one pending sound per kind; a per-episode beep cap is available.
-* **Manual dismissal** (``d`` key): silences audio for ``dismiss_s`` seconds
+* **Manual reset** (``r`` key or the on-screen DISMISS button): the alert is
+  cleared and the caller resets the Stage 9 engine to ALERT (see
+  ``TemporalEngine.reset``). Logged as ``RESET``. A still-drowsy driver is
+  re-detected within seconds, so the button cannot silence the system for good.
+* **Manual mute** (``d`` key): silences audio for ``dismiss_s`` seconds
   and cuts off the sound that is playing. The visual warning stays - a driver
   cannot dismiss what the camera sees. Audio re-arms automatically when the
   level *escalates* (e.g. MILD -> DROWSY, or voice becomes due) or when the
@@ -397,6 +401,7 @@ class AlertManager:
         self.status: Optional[AlertStatus] = None
         self.events: List[Tuple[float, str, int]] = []   # (t, event, level) - in memory for tests / summary
         self._dismiss_requested = False
+        self._reset_requested = False
         self._ever_updated = False
         self._busy_logged = False
 
@@ -407,12 +412,32 @@ class AlertManager:
         the decision and the log entry carry the pipeline's time base."""
         self._dismiss_requested = True
 
+    def reset(self) -> None:
+        """Driver pressed reset / clicked DISMISS: clear the alert completely on
+        the next update(). The caller must also reset the temporal engine, or the
+        unchanged state re-raises the alert on the very next frame."""
+        self._reset_requested = True
+
     def update(self, ts: TemporalState) -> AlertStatus:
         cfg = self.config
         t = ts.t
         if not self._ever_updated:
             self.level_since = t
             self._ever_updated = True
+
+        # 0. the driver's full reset: clear everything, stop any sound, start a fresh episode count
+        if self._reset_requested:
+            self._reset_requested = False
+            self.audio.silence()
+            if self.level > NONE:
+                self._log(ts, "RESET", self.level, "driver reset: alert cleared, detection restarted")
+            else:
+                self._log(ts, "RESET_IGNORED", NONE, "no active alert")
+            self.level, self.level_since = NONE, t
+            self.episode_since = math.nan
+            self.dismissed_until = math.nan
+            self.beeps = self.voices = 0
+            self.last_beep_t = self.last_voice_t = -math.inf
 
         # 1. the driver's dismissal
         if self._dismiss_requested:
@@ -536,12 +561,15 @@ class AlertManager:
 LEVEL_COLORS = {VISUAL: (0, 200, 255), BEEP: (0, 0, 255), VOICE: (0, 0, 255)}
 
 
-def draw_alert_overlay(frame: np.ndarray, status: Optional[AlertStatus], flash_hz: float = 2.0) -> None:
+def draw_alert_overlay(frame: np.ndarray, status: Optional[AlertStatus], flash_hz: float = 2.0
+                       ) -> Optional[Tuple[int, int, int, int]]:
     """Banner across the lower-middle of the frame (clear of the HUD, the eye
     boxes and the crop panel) and, for DROWSY levels, a flashing red border.
-    Pure drawing - a few rectangles and two strings."""
+    Pure drawing - a few rectangles and two strings. Returns the DISMISS button
+    rectangle (x0, y0, x1, y1) in frame pixels so the caller can hit-test clicks,
+    or None when nothing is drawn."""
     if status is None or status.level == NONE:
-        return
+        return None
     import cv2
 
     h, w = frame.shape[:2]
@@ -563,17 +591,25 @@ def draw_alert_overlay(frame: np.ndarray, status: Optional[AlertStatus], flash_h
 
     sub = "level {} {}".format(status.level, status.level_name)
     if status.dismissed:
-        sub += "  |  audio dismissed, {:.0f} s left".format(status.dismissed_until - status.t)
+        sub += "  |  audio muted, {:.0f} s left".format(status.dismissed_until - status.t)
     elif status.level >= BEEP:
-        sub += "  |  beeps {}  voice {}  |  'd' silences audio for a while".format(
+        sub += "  |  beeps {}  voice {}  |  d mutes audio".format(
             status.beeps_this_episode, status.voices_this_episode)
     else:
-        sub += "  |  'd' dismiss"
+        sub += "  |  d mutes audio"
+    # DISMISS button, bottom-right of the band's sub-line
+    label = "DISMISS  [r]"
+    (bw, bh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+    bx1, by0 = w - 16, band_y1 + 6
+    bx0, by1 = bx1 - bw - 24, by0 + bh + 16
+    cv2.rectangle(frame, (bx0, by0), (bx1, by1), (30, 30, 30), -1)
+    cv2.rectangle(frame, (bx0, by0), (bx1, by1), (255, 255, 255), 2)
+    cv2.putText(frame, label, (bx0 + 12, by1 - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
     (sw, sh), _ = cv2.getTextSize(sub, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-    cv2.putText(frame, sub, ((w - sw) // 2, band_y1 + sh + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3,
-                cv2.LINE_AA)
-    cv2.putText(frame, sub, ((w - sw) // 2, band_y1 + sh + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
-                cv2.LINE_AA)
+    sx = max(8, min((w - sw) // 2, bx0 - sw - 12))          # keep the sub-line clear of the button
+    cv2.putText(frame, sub, (sx, band_y1 + sh + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(frame, sub, (sx, band_y1 + sh + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    return bx0, by0, bx1, by1
 
 
 # --- replay of a recorded session ---------------------------------------------------
@@ -770,6 +806,22 @@ def self_test() -> int:
     print("[self-test] dismissal mutes audio {:.0f} s, keeps the banner, re-arms on escalation / expiry: ok".format(
         cfg.dismiss_s))
 
+    # 4c. full reset: level NONE at once, RESET logged, sound silenced, counts cleared.
+    m, beeper = _silent_manager(cfg, tmp=tmpdir / "t4c.csv")
+    _drive(m, 0.0, 1.0, ALERT, 0.0)
+    _drive(m, 1.0, 7.5, DROWSY, 1.0)                        # beeps, then voice at 7.0
+    assert m.level == VOICE and m.beeps >= 2
+    m.reset()
+    s = m.update(_ts(8.5, ALERT, 8.5))                       # caller also reset the engine -> ALERT
+    assert s.level == NONE and s.beeps_this_episode == 0 and math.isnan(s.episode_since), s
+    assert m.events[-1][1] == "RESET", m.events[-1]
+    _drive(m, 9.0, 1.0, ALERT, 8.5)
+    m.reset()
+    m.update(_ts(10.0, ALERT, 8.5))
+    assert m.events[-1][1] == "RESET_IGNORED"
+    m.close()
+    print("[self-test] reset: VOICE -> NONE immediately, RESET logged, counters cleared: ok")
+
     # 5. beep cap per episode.
     cfg_c = AlertConfig(beep_interval_s=1.0, voice_after_s=1e9, voice_closure_s=1e9, max_beeps_per_episode=3)
     m, beeper = _silent_manager(cfg_c, tmp=tmpdir / "t5.csv")
@@ -820,6 +872,11 @@ def self_test() -> int:
         draw_alert_overlay(frame, st)
         cost_ms = (time.perf_counter() - tick) * 1000.0
         assert cost_ms < 20.0 and frame.shape == (480, 640, 3), cost_ms
+    rect = draw_alert_overlay(frame, AlertStatus(t=0.0, level=BEEP, state=DROWSY, level_since=0.0, episode_since=0.0,
+                                                 dismissed_until=math.nan, beeps_this_episode=0,
+                                                 voices_this_episode=0, message="DROWSY - WAKE UP"))
+    assert rect is not None and 0 <= rect[0] < rect[2] <= 640 and 0 <= rect[1] < rect[3] <= 480, rect
+    assert draw_alert_overlay(frame, None) is None
     assert frame.any(), "overlay drew nothing"
     print("[self-test] overlay for all levels < 20 ms each: ok")
 

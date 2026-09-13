@@ -146,10 +146,20 @@ python -m src.features --beep-interval 5 --voice-after 10 --voice-cooldown 20 --
 python -m src.alert --test-sounds                         :: hear the three sounds once and see which backends are in use
 python -m src.alert --replay data\drowsy_session.csv       :: alert timeline a recorded session would have produced (silent)
 python -m src.alert --replay data\drowsy_session.csv --audio   :: the same, played in real time
-python -m src.alert --self-test                           :: 8 scenario checks, silent, no camera
+python -m src.alert --self-test                           :: 9 scenario checks, silent, no camera
 ```
 
-Press **`d`** in the live window to dismiss the alert audio.
+Two ways to dismiss, in the live window:
+
+* **`r`, or click the on-screen DISMISS button** — the alert is cleared *and the
+  state machine returns to ALERT* with an empty window ("I'm awake, start over").
+  Detection restarts from scratch: ~3 s of insufficient data, then the normal
+  rules, so a driver who is still drowsy is back in MILD/DROWSY within seconds
+  (a new microsleep escalates immediately). The button cannot silence the system
+  for good. Logged as `RESET` in the alert log and as a `manual reset` transition
+  in the Stage 9 output.
+* **`d`** — mutes the alert *audio* for 30 s; the banner stays because the camera
+  still sees a drowsy driver. Re-arms on escalation or when the 30 s expire.
 
 **Escalation ladder** ([`src/alert.py`](src/alert.py)) — driven only by the
 Stage 9 state, nothing else:
@@ -173,9 +183,9 @@ the state machine — not the alert layer — decides that the driver is drowsy.
 | Based on drowsiness state | `AlertManager.update(TemporalState)` is the only input. The module never sees frames, EAR or CNN outputs |
 | Configurable cooldown | `--beep-interval` (3 s), `--voice-cooldown` (15 s), `--voice-after` (6 s), `--voice-closure` (2 s), `--dismiss` (30 s), `--max-beeps` (cap per episode) |
 | No continuous repeated alarm | every audible level has its own cooldown; the audio queue holds at most one pending sound per kind (a beep that is still playing is logged `SUPPRESSED`, not stacked); optional beep cap per DROWSY episode |
-| Manual dismissal | `d` mutes the audio for 30 s and cuts off the sound that is playing. The **visual warning stays** — the driver cannot dismiss what the camera sees. Audio re-arms by itself when the level *escalates* (e.g. voice becomes due) or when the 30 s expire while the state is still MILD/DROWSY |
+| Manual dismissal | **`r` / DISMISS button**: clears the alert and resets the state machine to ALERT (`TemporalEngine.reset`), window emptied, re-detection within seconds if the driver is still drowsy. **`d`**: mutes the audio for 30 s and cuts off the sound that is playing; the visual warning stays; audio re-arms on escalation or when the 30 s expire while still MILD/DROWSY |
 | Must not freeze the vision pipeline | all blocking sound calls (`winsound.Beep`, text-to-speech) run on one daemon thread; `update()` is bookkeeping plus a non-blocking queue put; the overlay is a few `cv2` rectangles and strings |
-| Log alert events with timestamps | `logs/alerts_<timestamp>.csv`, one row per event: wall-clock ISO timestamp, pipeline time `t_s`, event, level, state, detail, PERCLOS, current closure, Stage 9 reasons. Events: `RAISED`, `ESCALATED`, `DEESCALATED`, `BEEP`, `VOICE`, `SUPPRESSED`, `DISMISSED`, `DISMISS_IGNORED`, `REARMED`, `CLEARED`. The file is created on the first alert, so a clean session leaves nothing behind. `--record` CSVs also gain `alert_level`, `alert_dismissed`, `alert_beeps`, `alert_voices` columns |
+| Log alert events with timestamps | `logs/alerts_<timestamp>.csv`, one row per event: wall-clock ISO timestamp, pipeline time `t_s`, event, level, state, detail, PERCLOS, current closure, Stage 9 reasons. Events: `RAISED`, `ESCALATED`, `DEESCALATED`, `BEEP`, `VOICE`, `SUPPRESSED`, `RESET`, `RESET_IGNORED`, `DISMISSED`, `DISMISS_IGNORED`, `REARMED`, `CLEARED`. The file is created on the first alert, so a clean session leaves nothing behind. `--record` CSVs also gain `alert_level`, `alert_dismissed`, `alert_beeps`, `alert_voices` columns |
 | Detection and alert logic separate | Stage 9 (`temporal.py`) has no knowledge of alerts; Stage 10 (`alert.py`) imports only `TemporalState` and the state names; `features.py` glues them with one `update()` call, one `draw_alert_overlay()` call and one key |
 | Independent of the ESP32 | nothing here knows about hardware. Stage 11 will be a second consumer of the same `AlertStatus` (level, dismissed, counts), not a change to this module |
 
@@ -190,12 +200,15 @@ audio thread because SAPI/COM objects are thread-affine.
 result. Whether 3 s between beeps is too nagging or 6 s to voice too slow is a
 question for the live test and, later, for the test subjects (Stage 15).
 
-**Verified so far (2026-09-13).** The 8-scenario self-test: MILD → banner and
+**Verified so far (2026-09-13).** The 9-scenario self-test: MILD → banner and
 one soft beep, ALERT → `CLEARED`; DROWSY → beeps at exactly the 3 s cooldown,
 voice after 6 s in DROWSY and again 15 s later, beeps pausing for the
 utterance; eyes closed 2 s while DROWSY → voice at once (2.5 s, not 7 s);
 dismissal mutes audio 30 s, keeps the banner, re-arms on escalation and on
-expiry, is ignored with no active alert; a 3-beep cap → 3 beeps then
+expiry, is ignored with no active alert; reset drops VOICE to NONE at once,
+logs `RESET`, clears the counters (and in the Stage 9 self-test a reset takes
+DROWSY to ALERT with an empty window, and a still-closed-eyes stream is back
+in DROWSY seconds later); a 3-beep cap → 3 beeps then
 `SUPPRESSED`; with a fake beeper that blocks 1 s per call, `update()` still
 took at most **2.6 ms**; the log has the documented columns and one row per
 event; overlay drawing < 20 ms per frame. Real sounds (`--test-sounds`):

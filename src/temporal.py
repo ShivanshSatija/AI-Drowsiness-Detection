@@ -415,6 +415,24 @@ class TemporalEngine:
             yawn_count=len(yawns), yawn_rate_per_min=len(yawns) / minutes if window_fill > 1.0 else 0.0,
             nod_count=len(nods), pitch_baseline_deg=baseline, fusion=cfg.fusion)
 
+    def reset(self, t: float, reason: str = "manual reset") -> None:
+        """Driver acknowledged the alert: back to ALERT with an empty window.
+
+        The window is cleared on purpose - the closures that caused the episode
+        would otherwise re-trigger MILD/DROWSY after the 2 s dwell. Detection
+        restarts from scratch: ~3 s of insufficient data, then normal rules, so a
+        driver who is still drowsy is re-detected within seconds (a new microsleep
+        escalates immediately). Logged as a transition so replays show it."""
+        if self.state != ALERT:
+            self._transition(t, ALERT, reason)
+        else:
+            self.transitions.append((t, ALERT, ALERT, reason))
+            self.state_since = t
+        self._frames.clear()
+        self._events.clear()
+        self._closure = self._yawn = self._nod = None
+        self._last_t = None
+
     def _transition(self, t: float, new_state: str, reason: str) -> None:
         self.transitions.append((t, self.state, new_state, reason))
         self.state, self.state_since = new_state, t
@@ -648,6 +666,19 @@ def self_test() -> int:
     eng = TemporalEngine()
     t, s = _stream(eng, 20, fps, 0.0, lambda t: True, valid_pattern=lambda t: (t % 1.0) >= 0.7)  # 70 % invalid
     assert not s.sufficient and s.state == ALERT, "unreliable window must hold ALERT and be flagged"
+
+    # 9b. manual reset: DROWSY -> ALERT at once, window emptied, re-detected if closures continue.
+    engine = TemporalEngine(TemporalConfig())
+    t, s = _stream(engine, 8.0, 20.0, 0.0, lambda t: t >= 5.0)      # 5 s open, then closed -> microsleep
+    assert s.state == DROWSY, s.state
+    engine.reset(t)
+    t, s = _stream(engine, 1.0, 20.0, t, lambda t: False)
+    assert s.state == ALERT and not s.sufficient and s.perclos == 0.0 and s.longest_closure_s == 0.0, s
+    assert engine.transitions[-1][1:] == (DROWSY, ALERT, "manual reset"), engine.transitions[-1]
+    t, s = _stream(engine, 6.0, 20.0, t, lambda t: True)             # still drowsy -> back within seconds
+    assert s.state == DROWSY, "a still-drowsy driver must be re-detected after a reset, got {}".format(s.state)
+    print("[self-test] manual reset: DROWSY -> ALERT, window cleared, re-detected {:.1f} s later: ok".format(
+        engine.transitions[-1][0] - engine.transitions[-2][0]))
     print("[self-test] invalid frames: excluded from PERCLOS (0.0 at 30 % invalid); 70 % invalid -> insufficient")
 
     # 10. fusion fallbacks.

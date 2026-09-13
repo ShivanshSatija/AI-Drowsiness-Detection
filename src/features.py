@@ -83,6 +83,7 @@ from src.landmarks import (DRAW_MODES, FaceLandmarkDetector, FaceLandmarks,
                            LandmarkConfig, LandmarkModelError, draw_driver_zone,
                            draw_ignored_faces, draw_landmarks)
 from src.temporal import Observation, TemporalConfig, TemporalEngine, TemporalState, draw_temporal_panel
+from src.alert import AlertConfig, AlertManager, AlertStatus, draw_alert_overlay
 
 # --- landmark index sets (MediaPipe canonical topology) ---------------------
 # Order matters: p1..p6 for the EAR formula.
@@ -296,6 +297,7 @@ class FeatureRecorder:
     CNN_FIELDS = ["cnn_left_state", "cnn_left_conf", "cnn_right_state", "cnn_right_conf", "cnn_ms"]
     TEMPORAL_FIELDS = ["state", "perclos", "blink_rate_per_min", "mean_blink_s", "closure_now_s",
                        "yawn_rate_per_min", "nod_count", "invalid_rate", "sufficient"]
+    ALERT_FIELDS = ["alert_level", "alert_dismissed", "alert_beeps", "alert_voices"]
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -308,12 +310,13 @@ class FeatureRecorder:
         self._file = open(self.path, "w", newline="", encoding="utf-8")
         self._writer = csv.writer(self._file)
         self._writer.writerow(["frame", "face_found", "inference_ms"] + GeometricFeatures.csv_fields()
-                              + self.POSE_FIELDS + self.VALIDITY_FIELDS + self.CNN_FIELDS + self.TEMPORAL_FIELDS)
+                              + self.POSE_FIELDS + self.VALIDITY_FIELDS + self.CNN_FIELDS + self.TEMPORAL_FIELDS
+                              + self.ALERT_FIELDS)
 
     def write(self, frame_index: int, inference_ms: float, feats: Optional[GeometricFeatures],
               pose: Optional[HeadPose] = None, assessment: Optional[FrameAssessment] = None,
               eye_states: Optional[Sequence] = None, cnn_ms: float = 0.0,
-              temporal: Optional[TemporalState] = None) -> None:
+              temporal: Optional[TemporalState] = None, alert: Optional[AlertStatus] = None) -> None:
         values = ([getattr(feats, name) for name in GeometricFeatures.csv_fields()]
                   if feats is not None else [""] * len(GeometricFeatures.csv_fields()))
         pose_values = ([round(pose.yaw_deg, 2), round(pose.pitch_deg, 2), round(pose.roll_deg, 2), pose.method]
@@ -325,8 +328,10 @@ class FeatureRecorder:
         cnn_values.append(round(cnn_ms, 2) if eye_states else "")
         temporal_values = ([temporal.as_row()[k] for k in self.TEMPORAL_FIELDS] if temporal is not None
                            else [""] * len(self.TEMPORAL_FIELDS))
+        alert_values = ([alert.as_row()[k] for k in self.ALERT_FIELDS] if alert is not None
+                        else [""] * len(self.ALERT_FIELDS))
         self._writer.writerow([frame_index, int(feats is not None), round(inference_ms, 2)]
-                              + values + pose_values + validity + cnn_values + temporal_values)
+                              + values + pose_values + validity + cnn_values + temporal_values + alert_values)
         self.rows += 1
 
     def close(self) -> None:
@@ -424,7 +429,7 @@ def draw_feature_hud(frame: np.ndarray, fps: float, inference_ms: float,
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
 
-    put("Stage 9 - features / pose / validity / CNN / temporal", 10, 24)
+    put("Stage 10 - features / pose / validity / CNN / temporal / alerts", 10, 24)
     put("FPS {:5.1f}   inference {:5.1f} ms".format(fps, inference_ms), 10, 46, COLOR_OK)
 
     if feats is None:
@@ -516,12 +521,16 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
              eye_config: Optional[EyePreprocessConfig] = None, show_crops: bool = True,
              dump_crops: Optional[Path] = None, dump_every: int = 30,
              classifier: Optional[EyeStateClassifier] = None, cnn_status: str = "",
-             temporal_config: Optional[TemporalConfig] = None) -> int:
+             temporal_config: Optional[TemporalConfig] = None,
+             alert_config: Optional[AlertConfig] = None, alerts: bool = True) -> int:
     pose_config = pose_config or PoseConfig()
     validity_config = validity_config or ValidityConfig()
     eye_config = eye_config or EyePreprocessConfig()
     temporal = TemporalEngine(temporal_config or TemporalConfig())
     temporal_state: Optional[TemporalState] = None
+    # Stage 10: the alert layer only ever sees TemporalState - never frames or features.
+    alerter: Optional[AlertManager] = AlertManager(alert_config or AlertConfig()) if alerts else None
+    alert_status: Optional[AlertStatus] = None
     time_in_state: Counter = Counter()
     tracker = InvalidFrameTracker(validity_config.window_seconds)
     crops_total = 0
@@ -579,8 +588,18 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                   tc.window_s, tc.fusion, tc.perclos_mild_enter, tc.perclos_mild_exit, tc.perclos_drowsy_enter,
                   tc.perclos_drowsy_exit, tc.microsleep_s, tc.mar_yawn_thr, tc.min_yawn_s, tc.nod_drop_deg,
                   tc.up_dwell_s, tc.down_dwell_s))
-        print("[features] Keys     : q/ESC quit | m mesh mode | g gray input | p pose method | "
-              "z driver zone | c crop panel | e save eye crops | s snapshot")
+        if alerter is not None:
+            ac = alerter.config
+            print("[features] Alerts   : MILD -> visual{} | DROWSY -> beep every {:.0f} s | voice after {:.0f} s in "
+                  "DROWSY or {:.1f} s closed eyes, repeat every {:.0f} s | key d mutes audio {:.0f} s | audio {} | "
+                  "beep {} | tts {} | log {}".format(
+                      " + soft beep" if ac.mild_beep_on_entry else "", ac.beep_interval_s, ac.voice_after_s,
+                      ac.voice_closure_s, ac.voice_cooldown_s, ac.dismiss_s, "on" if ac.audio else "OFF (--mute)",
+                      alerter.audio.beeper_name, alerter.audio.speaker.backend, alerter.log.path))
+        else:
+            print("[features] Alerts   : disabled (--no-alerts)")
+        print("[features] Keys     : q/ESC quit | d dismiss alert audio | m mesh mode | g gray input | "
+              "p pose method | z driver zone | c crop panel | e save eye crops | s snapshot")
         if show_window:
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
@@ -637,6 +656,9 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 _, from_state, to_state, why = temporal.transitions[-1]
                 print("[temporal] {:7.1f} s  {} -> {}  ({})".format(
                     observation.t - temporal._frames[0][0] if temporal._frames else 0.0, from_state, to_state, why))
+            # Stage 10: alerts follow the state; update() never blocks (audio is on its own thread).
+            if alerter is not None:
+                alert_status = alerter.update(temporal_state)
             fps = fps_counter.tick()
             inference_ms = detector.stats.inference_ms[-1] if detector.stats.inference_ms else 0.0
 
@@ -653,7 +675,7 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 rolls.append(pose.roll_deg)
             if recorder:
                 recorder.write(frame_index, inference_ms, feats, pose, assessment, eye_states, cnn_ms,
-                               temporal_state)
+                               temporal_state, alert_status)
 
             if show_window:
                 display = frame.copy()
@@ -675,12 +697,16 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                     draw_eye_panel(display, crops, 10, display.shape[0] - 140, states=eye_states)
                 if temporal_state is not None:
                     draw_temporal_panel(display, temporal_state, display.shape[1] - 250, 46)
+                if alerter is not None:
+                    draw_alert_overlay(display, alert_status, alerter.config.flash_hz)
                 cv2.imshow(WINDOW_NAME, display)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord("q"), 27):
                     print("[features] Quit key pressed.")
                     break
+                if key == ord("d") and alerter is not None:
+                    alerter.dismiss()
                 if key == ord("m"):
                     mode_index = (mode_index + 1) % len(DRAW_MODES)
                 if key == ord("g"):
@@ -710,6 +736,8 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
                 print("[features] Reached --max-frames {}.".format(max_frames))
                 break
 
+    if alerter is not None:
+        alerter.close()
     if recorder:
         recorder.close()
         print("[features] Wrote {} rows to {}".format(recorder.rows, recorder.path))
@@ -763,6 +791,14 @@ def run_demo(source: FrameSource, detector: FaceLandmarkDetector, mode: str = "c
             "{} {:.0%}".format(name, time_in_state[name] / total) for name in ("ALERT", "MILD", "DROWSY")))
         print("[temporal] transitions: {}".format(
             "; ".join("{} -> {} ({})".format(a, b, why) for _, a, b, why in temporal.transitions) or "none"))
+    if alerter is not None:
+        counts = Counter(event for _, event, _ in alerter.events)
+        print("[alert] events: {}{}".format(
+            ", ".join("{} x{}".format(k, v) for k, v in counts.items()) or "none",
+            " | log {} ({} rows)".format(alerter.log.path, alerter.log.rows) if alerter.log.rows
+            else " (no alert, no log file written)"))
+        if alerter.audio.errors:
+            print("[alert] audio errors: {}".format(alerter.audio.errors))
     return 0
 
 
@@ -943,6 +979,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--microsleep", type=float, default=1.5,
                         help="Closure in seconds that forces DROWSY (default 1.5, untuned)")
     parser.add_argument("--yawn-mar", type=float, default=0.60, help="MAR threshold for a yawn (default 0.60, untuned)")
+    parser.add_argument("--no-alerts", action="store_true", help="Stage 10 off: no overlay, no sound, no log")
+    parser.add_argument("--mute", action="store_true", help="Alerts decided, drawn and logged, but no sound")
+    parser.add_argument("--tts", choices=("auto", "pyttsx3", "powershell", "none"), default="auto",
+                        help="Voice backend (default auto: pyttsx3 if installed, else Windows PowerShell speech)")
+    parser.add_argument("--beep-interval", type=float, default=3.0, help="Seconds between DROWSY beeps (default 3)")
+    parser.add_argument("--voice-after", type=float, default=6.0,
+                        help="Seconds in DROWSY before the voice warning (default 6)")
+    parser.add_argument("--voice-closure", type=float, default=2.0,
+                        help="Eyes closed this long while DROWSY -> voice at once (default 2)")
+    parser.add_argument("--voice-cooldown", type=float, default=15.0,
+                        help="Seconds between voice warnings (default 15)")
+    parser.add_argument("--dismiss", type=float, default=30.0,
+                        help="Seconds the d key mutes alert audio (default 30)")
+    parser.add_argument("--max-beeps", type=int, default=0, help="Beep cap per DROWSY episode (default 0 = none)")
+    parser.add_argument("--no-mild-beep", action="store_true", help="MILD is visual only, no entry beep")
+    parser.add_argument("--alert-log", type=Path, default=None,
+                        help="Alert event CSV (default logs/alerts_<timestamp>.csv, created on the first alert)")
     parser.add_argument("--no-mirror", action="store_true", help="Do not mirror the display")
     parser.add_argument("--no-zone", action="store_true",
                         help="Start with the driver-zone ellipse hidden ('z' key toggles it live)")
@@ -996,6 +1049,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         perclos_mild_exit=round(args.perclos_mild * 2 / 3, 3), perclos_drowsy_enter=args.perclos_drowsy,
         perclos_drowsy_exit=round(args.perclos_drowsy * 0.73, 3), microsleep_s=args.microsleep,
         mar_yawn_thr=args.yawn_mar)
+    alert_config = AlertConfig(
+        beep_interval_s=args.beep_interval, voice_after_s=args.voice_after, voice_closure_s=args.voice_closure,
+        voice_cooldown_s=args.voice_cooldown, dismiss_s=args.dismiss, max_beeps_per_episode=args.max_beeps,
+        mild_beep_on_entry=not args.no_mild_beep, tts_backend=args.tts, audio=not args.mute,
+        log_path=args.alert_log)
 
     try:
         return run_demo(create_source(camera), detector, mode=args.mode, mirror=not args.no_mirror,
@@ -1003,7 +1061,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         pose_config=pose_config, validity_config=validity_config,
                         show_zone=not args.no_zone, eye_config=eye_config, show_crops=not args.no_crops,
                         dump_crops=args.dump_crops, dump_every=args.dump_every,
-                        classifier=classifier, cnn_status=cnn_status, temporal_config=temporal_config)
+                        classifier=classifier, cnn_status=cnn_status, temporal_config=temporal_config,
+                        alert_config=alert_config, alerts=not args.no_alerts)
     except (CameraError, LandmarkModelError) as exc:
         print("ERROR: {}".format(exc), file=sys.stderr)
         return 1

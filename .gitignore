@@ -47,6 +47,11 @@ data/snapshots/*
 *.zip
 *.tar.gz
 
+# --- Alert event logs (Stage 10) -----------------------------------------
+# One CSV per session; session data, not source. The folder itself is kept.
+logs/*
+!logs/.gitkeep
+
 # --- Models ---------------------------------------------------------------
 # models/eye_cnn.pt IS committed (it is small and needed to run the system).
 # Training runs (checkpoints, curves, per-run metrics) live under runs/ and

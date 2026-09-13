@@ -26,7 +26,10 @@ mediapipe==0.10.35
 torch>=2.2
 
 # --- Stage 10: laptop alerts ----------------------------------------------
-# pyttsx3>=2.90
+# Beeps use the standard library (winsound). Voice uses pyttsx3 (Windows SAPI5;
+# tested 2.99). Optional: without it the code falls back to Windows PowerShell
+# System.Speech (--tts powershell), slower to start but dependency-free.
+pyttsx3>=2.90
 
 # --- Stage 11: ESP32 serial link ------------------------------------------
 # pyserial>=3.5

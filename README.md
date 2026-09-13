@@ -79,7 +79,7 @@ AI-Drowsiness-Detection/
 │   ├── headpose.py         head pose: yaw / pitch / roll       [Stage 4]
 │   ├── eye_cnn.py          eye crop preprocessing [Stage 5], CNN [Stages 7-8]
 │   ├── temporal.py         60 s window: PERCLOS / blinks / yawns / nods, FSM + hysteresis, replay [Stage 9]
-│   ├── alert.py            escalating laptop alerts            [Stage 10]
+│   ├── alert.py            escalating alerts: visual → beep → voice, cooldowns, dismissal, event log, replay [Stage 10]
 │   ├── hardware.py         ESP32 serial link                   [Stage 11]
 │   └── app.py              Streamlit dashboard                 [Stage 12]
 ├── training/
@@ -134,6 +134,86 @@ same `cv2/` folder and the result is corrupt. If `opencv-python` is already
 present, `pip uninstall -y opencv-python` first.
 
 ## 6. Running the current stage
+
+### Stage 10 — escalating laptop alerts: visual → beep → voice
+
+```bat
+pip install pyttsx3                                       :: once, in the existing venv (already in requirements.txt)
+python -m src.features                                    :: live: alerts ON - overlay, beeps, voice; log to logs\alerts_<time>.csv
+python -m src.features --mute                             :: alerts decided, drawn and logged, but silent
+python -m src.features --no-alerts                        :: exactly the Stage 9 behaviour
+python -m src.features --beep-interval 5 --voice-after 10 --voice-cooldown 20 --dismiss 60 --no-mild-beep
+python -m src.alert --test-sounds                         :: hear the three sounds once and see which backends are in use
+python -m src.alert --replay data\drowsy_session.csv       :: alert timeline a recorded session would have produced (silent)
+python -m src.alert --replay data\drowsy_session.csv --audio   :: the same, played in real time
+python -m src.alert --self-test                           :: 8 scenario checks, silent, no camera
+```
+
+Press **`d`** in the live window to dismiss the alert audio.
+
+**Escalation ladder** ([`src/alert.py`](src/alert.py)) — driven only by the
+Stage 9 state, nothing else:
+
+| Level | When | What the driver gets |
+|---|---|---|
+| 0 NONE | state ALERT | nothing |
+| 1 VISUAL | state MILD | amber banner *"MILD DROWSINESS – take a break soon"*, plus one soft 660 Hz beep when MILD is entered (`--no-mild-beep` to drop it) |
+| 2 BEEP | state DROWSY | red banner *"DROWSY – WAKE UP"*, flashing red frame border, 1 kHz / 250 ms beep every **3 s** |
+| 3 VOICE | DROWSY for ≥ **6 s**, **or** eyes closed *right now* for ≥ **2 s** while DROWSY | spoken *"Wake up. You are showing signs of drowsiness. Pull over and take a break."*, repeated every **15 s**; beeps continue between utterances |
+
+The closed-eye shortcut exists because a driver whose eyes are shut cannot see a
+banner and can sleep through a 250 ms beep; speech is the modality that still
+works. Its 2 s threshold is deliberately above Stage 9's 1.5 s microsleep, so
+the state machine — not the alert layer — decides that the driver is drowsy.
+
+**How the roadmap's requirements are met**
+
+| Requirement | Implementation |
+|---|---|
+| Based on drowsiness state | `AlertManager.update(TemporalState)` is the only input. The module never sees frames, EAR or CNN outputs |
+| Configurable cooldown | `--beep-interval` (3 s), `--voice-cooldown` (15 s), `--voice-after` (6 s), `--voice-closure` (2 s), `--dismiss` (30 s), `--max-beeps` (cap per episode) |
+| No continuous repeated alarm | every audible level has its own cooldown; the audio queue holds at most one pending sound per kind (a beep that is still playing is logged `SUPPRESSED`, not stacked); optional beep cap per DROWSY episode |
+| Manual dismissal | `d` mutes the audio for 30 s and cuts off the sound that is playing. The **visual warning stays** — the driver cannot dismiss what the camera sees. Audio re-arms by itself when the level *escalates* (e.g. voice becomes due) or when the 30 s expire while the state is still MILD/DROWSY |
+| Must not freeze the vision pipeline | all blocking sound calls (`winsound.Beep`, text-to-speech) run on one daemon thread; `update()` is bookkeeping plus a non-blocking queue put; the overlay is a few `cv2` rectangles and strings |
+| Log alert events with timestamps | `logs/alerts_<timestamp>.csv`, one row per event: wall-clock ISO timestamp, pipeline time `t_s`, event, level, state, detail, PERCLOS, current closure, Stage 9 reasons. Events: `RAISED`, `ESCALATED`, `DEESCALATED`, `BEEP`, `VOICE`, `SUPPRESSED`, `DISMISSED`, `DISMISS_IGNORED`, `REARMED`, `CLEARED`. The file is created on the first alert, so a clean session leaves nothing behind. `--record` CSVs also gain `alert_level`, `alert_dismissed`, `alert_beeps`, `alert_voices` columns |
+| Detection and alert logic separate | Stage 9 (`temporal.py`) has no knowledge of alerts; Stage 10 (`alert.py`) imports only `TemporalState` and the state names; `features.py` glues them with one `update()` call, one `draw_alert_overlay()` call and one key |
+| Independent of the ESP32 | nothing here knows about hardware. Stage 11 will be a second consumer of the same `AlertStatus` (level, dismissed, counts), not a change to this module |
+
+**Audio backends.** Beeps: `winsound` (standard library) on Windows, a
+`sounddevice` sine tone elsewhere. Voice (`--tts`): `pyttsx3` (Windows SAPI5,
+default when installed), `powershell` (Windows `System.Speech` in a child
+process — no dependency, ~1.5 s start-up per utterance, but dismissal kills it
+mid-sentence), `none` (prints the text). The engine is created lazily on the
+audio thread because SAPI/COM objects are thread-affine.
+
+**Every policy value above is an INITIAL engineering choice**, not a measured
+result. Whether 3 s between beeps is too nagging or 6 s to voice too slow is a
+question for the live test and, later, for the test subjects (Stage 15).
+
+**Verified so far (2026-09-13).** The 8-scenario self-test: MILD → banner and
+one soft beep, ALERT → `CLEARED`; DROWSY → beeps at exactly the 3 s cooldown,
+voice after 6 s in DROWSY and again 15 s later, beeps pausing for the
+utterance; eyes closed 2 s while DROWSY → voice at once (2.5 s, not 7 s);
+dismissal mutes audio 30 s, keeps the banner, re-arms on escalation and on
+expiry, is ignored with no active alert; a 3-beep cap → 3 beeps then
+`SUPPRESSED`; with a fake beeper that blocks 1 s per call, `update()` still
+took at most **2.6 ms**; the log has the documented columns and one row per
+event; overlay drawing < 20 ms per frame. Real sounds (`--test-sounds`):
+`winsound` + `pyttsx3`, soft beep 0.16 s, drowsy beep 0.27 s, the first
+utterance 7.1 s including ~2 s one-time engine start-up — the main thread was
+free throughout. Replaying the Stage 9 recording `data/drowsy_session.csv`
+(124.5 s) through both layers: `RAISED` VISUAL at 9.4 s (MILD), `ESCALATED`
+to BEEP at 36.4 s (DROWSY on a microsleep) and to VOICE at 36.9 s (closed-eye
+shortcut, closure reached 2 s), then 26 beeps and 6 utterances in the 88 s the
+state stayed DROWSY — never closer than 3 s apart, voice never closer than 15 s;
+`update()` cost median 0.002 ms, max 0.8 ms over 2478 frames. Integrated
+headless run on the test video with MILD forced (`--perclos-mild -1 --mute`):
+`RAISED` + entry `BEEP` logged, record CSV carries the alert columns, exit
+clean. **Not yet done:** a live run with sound on and the `d` key, in front of
+the camera — that is the Stage 10 live test. Note from the replay: the alarms
+ran for 88 s because Stage 9 held DROWSY for 88 s (a 2.6 s closure stayed in
+its 60 s window); how long the state persists is a Stage 9 tuning question,
+not an alert-policy one.
 
 ### Stage 9 — temporal drowsiness analysis and the ALERT / MILD / DROWSY state machine
 
@@ -649,8 +729,8 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 6 | MRL eye dataset: inspected, subject-independent split built and verified, packs written | ✅ done |
 | 7 | Eye-state CNN training and evaluation | 🔶 code complete; first real run training — results pending |
 | 8 | CNN integrated into the live pipeline | 🔶 integrated and verified with interim weights; live test waits for the final model |
-| 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | 🔶 implemented, 11 synthetic scenarios pass, replay tool; thresholds are initial values — live acted-drowsiness test pending |
-| 10 | Escalating laptop alert system | ⬜ |
+| 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ✅ live acted-drowsiness test done 2026-09-13 (`data/drowsy_session.csv`, 124 s: ALERT → MILD at 9.4 s on PERCLOS, → DROWSY at 36.4 s on a microsleep); thresholds are still the initial values — tuning on recordings is open |
+| 10 | Escalating laptop alert system | 🔶 implemented: visual → beep → voice with cooldowns, dismissal, non-blocking audio thread, event log; 8-scenario self-test and replay of the recorded session pass; live test with sound on pending |
 | 11 | ESP32 + buzzer physical alarm | ⬜ |
 | 12 | Streamlit dashboard + event logging | ⬜ |
 | 13 | NoIR camera conversion + 850 nm IR illumination | ⬜ |

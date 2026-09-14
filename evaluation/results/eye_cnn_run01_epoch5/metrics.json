@@ -1,0 +1,144 @@
+{
+  "test": {
+    "n": 13107,
+    "accuracy": 0.9372854200045777,
+    "closed": {
+      "precision": 0.9663453684038555,
+      "recall": 0.9056806002143623,
+      "f1": 0.9350300347771102,
+      "support": 6531
+    },
+    "open": {
+      "precision": 0.9118236472945892,
+      "recall": 0.9686739659367397,
+      "f1": 0.9393894705795606,
+      "support": 6576
+    },
+    "macro_f1": 0.9372097526783354,
+    "confusion_matrix": {
+      "rows": "true",
+      "cols": "predicted",
+      "classes": [
+        "CLOSED",
+        "OPEN"
+      ],
+      "matrix": [
+        [
+          5915,
+          616
+        ],
+        [
+          206,
+          6370
+        ]
+      ]
+    }
+  },
+  "test_loss": 0.14632872561169197,
+  "test_subjects": 8,
+  "val_best": {
+    "accuracy": 0.9702637139056264,
+    "epoch": 5
+  },
+  "best_val_acc": 0.9702637139056264,
+  "best_epoch": 5,
+  "epochs_run": 5,
+  "seed": 0,
+  "parameters": 582562,
+  "device": "cpu",
+  "train_minutes": 34.31609238000001,
+  "augmentation": true,
+  "equalize": false,
+  "image_size": 64,
+  "class_order": [
+    "CLOSED",
+    "OPEN"
+  ],
+  "splits": {
+    "train": {
+      "images": 59012,
+      "subjects": 25
+    },
+    "val": {
+      "images": 12779,
+      "subjects": 4
+    },
+    "test": {
+      "images": 13107,
+      "subjects": 8
+    }
+  },
+  "finished_at": "2026-09-14T21:01:10",
+  "by_glasses": {
+    "no glasses": {
+      "n": 8549,
+      "accuracy": 0.9640893671774476,
+      "closed": {
+        "precision": 0.9651858180264844,
+        "recall": 0.969118593180356,
+        "f1": 0.9671482075976459,
+        "support": 4663
+      },
+      "open": {
+        "precision": 0.9627618308766486,
+        "recall": 0.9580545548121462,
+        "f1": 0.9604024248677931,
+        "support": 3886
+      },
+      "macro_f1": 0.9637753162327195,
+      "confusion_matrix": {
+        "rows": "true",
+        "cols": "predicted",
+        "classes": [
+          "CLOSED",
+          "OPEN"
+        ],
+        "matrix": [
+          [
+            4519,
+            144
+          ],
+          [
+            163,
+            3723
+          ]
+        ]
+      }
+    },
+    "glasses": {
+      "n": 4558,
+      "accuracy": 0.887011847301448,
+      "closed": {
+        "precision": 0.9701181375955524,
+        "recall": 0.7473233404710921,
+        "f1": 0.8442697308739039,
+        "support": 1868
+      },
+      "open": {
+        "precision": 0.8486694453350433,
+        "recall": 0.9840148698884759,
+        "f1": 0.9113444654845928,
+        "support": 2690
+      },
+      "macro_f1": 0.8778070981792483,
+      "confusion_matrix": {
+        "rows": "true",
+        "cols": "predicted",
+        "classes": [
+          "CLOSED",
+          "OPEN"
+        ],
+        "matrix": [
+          [
+            1396,
+            472
+          ],
+          [
+            43,
+            2647
+          ]
+        ]
+      }
+    }
+  }
+}

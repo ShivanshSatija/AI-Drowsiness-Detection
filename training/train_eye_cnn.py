@@ -266,6 +266,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--limit", type=int, default=0, help="Use only the first N images per split (smoke tests)")
     parser.add_argument("--resume", type=Path, default=None, help="Continue from a last.pt checkpoint")
     parser.add_argument("--patience", type=int, default=8, help="Stop when val accuracy has not improved for N epochs")
+    parser.add_argument("--eval-only", action="store_true",
+                        help="Skip training; evaluate <out>/best.pt on the test split and write metrics / export")
     args = parser.parse_args(argv)
 
     set_seed(args.seed)
@@ -314,6 +316,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     history: List[Dict] = []
     start_epoch, best_val_acc, best_epoch = 1, -1.0, 0
+    if args.eval_only and args.resume is None and (out / "last.pt").exists():
+        args.resume = out / "last.pt"          # recover history and best-epoch bookkeeping
     if args.resume and args.resume.exists():
         ckpt = torch.load(str(args.resume), map_location=device, weights_only=False)
         model.load_state_dict(ckpt["state_dict"])
@@ -323,6 +327,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         start_epoch = ckpt["epoch"] + 1
         best_val_acc, best_epoch = ckpt["best_val_acc"], ckpt["best_epoch"]
         print("[train] resumed from {} at epoch {}".format(args.resume, start_epoch))
+    if args.eval_only:
+        if not (out / "best.pt").exists():
+            raise SystemExit("--eval-only needs {} - nothing to evaluate".format(out / "best.pt"))
+        start_epoch = args.epochs + 1          # skip the training loop entirely
+        print("[train] --eval-only: evaluating {} (best epoch {}, val acc {:.4f}, {} epochs recorded)".format(
+            out / "best.pt", best_epoch, best_val_acc, len(history)))
 
     # --- loop -------------------------------------------------------------------
     t_start = time.perf_counter()
@@ -372,7 +382,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if epochs_without_improvement >= args.patience:
             print("[train] early stop: no validation improvement for {} epochs".format(args.patience))
             break
-    train_minutes = (time.perf_counter() - t_start) / 60.0
+    train_minutes = ((time.perf_counter() - t_start) / 60.0 if not args.eval_only
+                     else sum(h.get("seconds", 0.0) for h in history) / 60.0)
 
     # --- final evaluation on unseen subjects -------------------------------------
     best_model, _ = load_model(out / "best.pt", device=device)

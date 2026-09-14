@@ -7,15 +7,17 @@ illumination.
 Final-year B.E. project. Built and committed stage by stage — the commit history is
 the development log.
 
-> **Status: Stages 1–6 complete; Stage 7 training in progress; Stage 8 and 9
-> code complete and verified, awaiting the trained model for their live tests.**
-> Camera → landmarks → EAR / MAR → head pose → frame validity → eye crops →
-> (CNN) → 60 s temporal analysis → ALERT / MILD / DROWSY all run end to end.
-> The first real CNN training run is under way and its measured results will
-> be added here when it finishes. **No eye-state accuracy is claimed until
-> then, and every temporal threshold is an untuned initial value.**
-> No detection results are reported yet. Every number published in this README will
-> come from a real experiment; nothing is estimated or copied from other papers.
+> **Status: Stages 1–12 implemented; Stage 13 tooling ready, waiting for the
+> USB webcam.** The whole chain — camera → landmarks → EAR / MAR → head pose →
+> frame validity → eye crops → eye-state CNN → 60 s temporal analysis → ALERT /
+> MILD / DROWSY → laptop alerts → ESP32 buzzer → Streamlit dashboard + SQLite
+> log — runs end to end. The CNN in `models/eye_cnn.pt` is a **real but interim**
+> checkpoint: run 01 stopped after 5 of 15 epochs and scored **93.7 %** on 8
+> unseen test subjects (below the > 95 % target; glasses are the weak spot); the
+> run is being resumed and the finished model will replace it. **Every temporal
+> and alert threshold is still an untuned initial value.**
+> Every number in this README comes from a real experiment on this project's own
+> hardware and data; nothing is estimated or copied from other papers.
 
 ---
 
@@ -581,15 +583,49 @@ GPU, writing checkpoints, curves and metrics to Drive after every epoch.
 takes **3.8 ms** at width 32 (2.5 ms at width 16) — well inside the ~38 ms per
 frame left after landmarks, so the default width stays 32.
 
-**Pipeline smoke test — not a result.** To prove the code path, the script
-was run for 3 epochs on a *synthetic* stand-in for the splits (3,000 / 600 /
-600 images of a bright ring vs a dark arc, disjoint fake subjects). It reached
-100 % because the task is trivially separable; the point is that data
+**First real results — run 01 (this laptop's CPU), interrupted after epoch 5
+of 15.** The run was launched on the real subject-independent split and was
+killed from outside after epoch 5 (the machine slept); the epoch-5 checkpoint
+was then evaluated with `--eval-only` on the **test split of 8 subjects the
+model never saw** (13,107 images). Files:
+[`evaluation/results/eye_cnn_run01_epoch5/`](evaluation/results/eye_cnn_run01_epoch5/);
+the checkpoint itself is `models/eye_cnn.pt` until a better one exists.
+
+| Metric | CLOSED | OPEN |
+|---|---|---|
+| Precision | 0.9663 | 0.9118 |
+| Recall | **0.9057** | 0.9687 |
+| F1 | 0.9350 | 0.9394 |
+| Support | 6,531 | 6,576 |
+
+**Accuracy 0.9373**, macro F1 0.9372. Confusion matrix (rows true CLOSED, OPEN;
+cols predicted): `[[5915, 616], [206, 6370]]` — the dominant error is closed
+eyes read as open (616), the safety-relevant direction.
+
+| Glasses | n | Accuracy | CLOSED recall | OPEN recall |
+|---|---|---|---|---|
+| no glasses | 8,549 | 0.9641 | 0.9691 | 0.9581 |
+| glasses | 4,558 | **0.8870** | **0.7473** | 0.9840 |
+
+Training: 5 epochs, best validation accuracy 0.9703 at epoch 5, seed 0,
+582,562 parameters, 34.3 min on CPU, augmentation on, CLAHE off. Validation
+accuracy per epoch: 0.785 → 0.952 → 0.960 → 0.948 → 0.970 (the curve in
+`curves.png`).
+
+Three honest readings. (1) **93.7 % on unseen subjects is below the roadmap's
+> 95 % target** at this point; the target is not being engineered towards — the
+run is being resumed for its remaining epochs and whatever the finished model
+scores replaces this table. (2) **Glasses are the weak spot:** a quarter of
+closed eyes behind glasses are called open, almost certainly the specular
+reflections that MRL labels in 22 % of its images; the test split also carries
+more glasses (34.8 %) than the training split (27.4 %). (3) The gap between
+validation (0.970, 4 subjects) and test (0.937, 8 subjects) is itself a
+finding about subject variability — it is exactly why the split is by subject.
+
+Before any real data existed the code path was proven on a *synthetic*
+stand-in (bright ring vs dark arc, disjoint fake subjects, 3 epochs → 100 %):
 loading, augmentation, checkpointing, curves, metrics, export and reload all
-worked, and `EyeStateClassifier` reproduced the training labels on the
-exported file. **Real eye-state figures will appear here only after the Colab
-run on the MRL split.** The roadmap's > 95 % target will not be engineered
-towards; whatever the unseen-subject test set gives is what gets reported.
+worked. That number is plumbing, not a result.
 
 ### Stage 5 — eye crops, preprocessed exactly as the CNN will see them
 
@@ -937,8 +973,8 @@ protocol and what each metric reveals about the NoIR/IR conversion.
 | 4 | Head pose (yaw / pitch / roll) + INVALID-frame gate + invalid-frame rate | ✅ done |
 | 5 | Eye-region cropping + preprocessing shared with training | ✅ done |
 | 6 | MRL eye dataset: inspected, subject-independent split built and verified, packs written | ✅ done |
-| 7 | Eye-state CNN training and evaluation | 🔶 code complete; first real run training — results pending |
-| 8 | CNN integrated into the live pipeline | 🔶 integrated and verified with interim weights; live test waits for the final model |
+| 7 | Eye-state CNN training and evaluation | 🔶 first real run: **93.7 %** on 8 unseen subjects after 5 epochs (interrupted); resumed run in progress; glasses recall is the weak spot |
+| 8 | CNN integrated into the live pipeline | 🔶 integrated; runs with the real interim model (`models/eye_cnn.pt`, 93.7 %); live webcam test with it — blinking, prolonged closure, glasses, angles, distances, lighting — still to be done |
 | 9 | Temporal analysis + ALERT/MILD/DROWSY state machine | ✅ live acted-drowsiness test done 2026-09-13 (`data/drowsy_session.csv`, 124 s: ALERT → MILD at 9.4 s on PERCLOS, → DROWSY at 36.4 s on a microsleep); thresholds are still the initial values — tuning on recordings is open |
 | 10 | Escalating laptop alert system | 🔶 implemented: visual → beep → voice with cooldowns, dismissal, non-blocking audio thread, event log; 8-scenario self-test and replay of the recorded session pass; live test with sound on pending |
 | 11 | ESP32 + buzzer physical alarm | 🔶 firmware + Python link + integration written; Python side verified against a protocol-exact fake board; **not yet run on the real ESP32** — hardware test pending |
